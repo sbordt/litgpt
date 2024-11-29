@@ -14,6 +14,7 @@ import torch.nn as nn
 from typing_extensions import Self
 
 from litgpt.config import Config
+from litgpt.monitor import MonitoredModule
 
 
 class GPT(nn.Module):
@@ -239,9 +240,10 @@ class Block(nn.Module):
         return x
 
 
-class CausalSelfAttention(nn.Module):
+class CausalSelfAttention(nn.Module, MonitoredModule):
     def __init__(self, config: Config, block_idx: int) -> None:
-        super().__init__()
+        nn.Module.__init__(self)  # Initialize nn.Module
+        MonitoredModule.__init__(self)  # Initialize MonitoredModule
         shape = (config.n_head + 2 * config.n_query_groups) * config.head_size
         # key, query, value projections for all heads, but in a batch
         self.attn = nn.Linear(config.n_embd, shape, bias=config.bias or config.attn_bias)
@@ -318,6 +320,9 @@ class CausalSelfAttention(nn.Module):
             mask += sliding_window_bias
 
         y = self.scaled_dot_product_attention(q, k, v, mask)
+
+        # monitor the attention operation
+        self.monitor_scaled_dot_product_attention(q, k, v, y, mask)
 
         y = y.reshape(B, T, self.config.head_size * self.config.n_head)  # re-assemble all head outputs side by side
 
