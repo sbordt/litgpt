@@ -322,7 +322,8 @@ class CausalSelfAttention(nn.Module, MonitoredModule):
         y = self.scaled_dot_product_attention(q, k, v, mask)
 
         # monitor the attention operation
-        self.monitor_scaled_dot_product_attention(q, k, v, y, mask)
+        if self.is_monitoring:
+            self.get_training_monitor().monitor_scaled_dot_product_attention(self, q, k, v, y, mask, is_reference=self.is_reference_module)
 
         y = y.reshape(B, T, self.config.head_size * self.config.n_head)  # re-assemble all head outputs side by side
 

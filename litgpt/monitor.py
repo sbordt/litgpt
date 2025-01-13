@@ -1,15 +1,4 @@
 # Monitor the training of pytorch modules.
-#
-# We use a simple convention for the keys under which different metrics are logged:
-#
-# - Module activations are logged under "{module_name}.activation". For example, "{module_name}.activation.l2norm" is the l2 norm of the activations.
-# - Parameters logged under "{parameter_name}". For example, "{parameter_name}.l2norm" is the l2 norm of the parameters.
-# - Gradients are logged under "{parameter_name}.gradient". For example, "{parameter_name}.gradient.l2norm" is the l2 norm of the gradients.
-# - The difference between the module and the reference module is indicated by ".diff". For example, "{module_name}.activation.diff.l2norm" is the l2 norm of the difference between the activations of the module and the reference module.
-# - Module-specific metrics are logged similarly, for example "{module_name}.head_1.keys.activation.l2norm" is the l2 norm of the activations of the keys of the first attention head of the module.
-#
-#
-
 
 
 import torch
@@ -26,9 +15,9 @@ def format_module_name(name):
 
 
 class MonitoredModule:
-    """This class provides a convient interface to the TrainingMonitor for subclasses. 
-    
-    A torch.nn.Module can subclass this class to monitor custom metrics during training.   
+    """A torch.nn.Module can subclass this class to monitor custom metrics during training.
+
+    During the foward pass, the module can obtain the training monitor via get_training_monitor(). 
 
     TrainingMonitor automatically calls set_training_monitor on all modules that subclass MonitoredModule.
     """
@@ -43,28 +32,33 @@ class MonitoredModule:
         self.training_monitor = monitor
         self.is_reference_module = is_reference_module
 
+    def get_training_monitor(self):
+        return self.training_monitor
+
+    @property
     def is_monitoring(self):
         return self.training_monitor is not None and self.training_monitor.is_monitoring()
 
 
-    #################################################################
-    # Interface with the training monitor
-    # To be called by the monitored module
-    #################################################################
-    
-    def monitor_scaled_dot_product_attention(self, *args, **kwargs):
-        """See the corresponding function in the TrainingMonitor class."""
-        if not self.is_monitoring():
-            return
-        # add the module itself as the first argument
-        args = [self] + list(args)
-        # add is_reference to the kwargs
-        kwargs["is_reference"] = self.is_reference_module
-        self.training_monitor.monitor_scaled_dot_product_attention(*args, **kwargs)
-
-
-
 class TrainingMonitor:
+    """Monitor the training of a pytorch modules.
+
+    Supports a reference module and micro-batches. 
+
+    The reference module is another copy of the module, and we compare the activations and parameters of the monitored module with the reference module. 
+    The reference module must take a forward pass with the same input as the monitored module BEFORE the monitored module takes a forward pass.
+
+    Mirco-batches are supported by allowing abitrarily many forward passes before after_forward is called. After_forward aggregates the statistics of the mini-batches. 
+    If there is a reference module, the respective micro-batch of the refernce module must take place before the micro-batch of the monitored module.
+
+    We use a simple convention for the keys under which different metrics are logged:
+    
+     - Module activations are logged under "{module_name}.activation". For example, "{module_name}.activation.l2norm" is the l2 norm of the activations.
+     - Parameters logged under "{parameter_name}". For example, "{parameter_name}.l2norm" is the l2 norm of the parameters.
+     - Gradients are logged under "{parameter_name}.gradient". For example, "{parameter_name}.gradient.l2norm" is the l2 norm of the gradients.
+     - The difference between the module and the reference module is indicated by ".diff". For example, "{module_name}.activation.diff.l2norm" is the l2 norm of the difference between the activations of the module and the reference module.
+     - Module-specific metrics are logged similarly, for example "{module_name}.head_1.keys.activation.l2norm" is the l2 norm of the activations of the keys of the first attention head of the module.
+    """
 
     #################################################################
     # Setup
@@ -88,7 +82,7 @@ class TrainingMonitor:
         self.verbose = False
         self.monitor_interval = monitor_interval
         self.step = step_start
-        self.monitor_step = False
+        self.monitor_step = False # do we monitor the current gradient step?
         self.log_dict = {} # a dict to log the parameters, activations, etc. of all gradient steps. maps the step number to the log dict of that step.
 
         if module is not None:
@@ -176,7 +170,6 @@ class TrainingMonitor:
     #################################################################
     # Set the current step, get log dict
     #################################################################
-
     def set_step(self, step):
         """Notify the monitor that a new step has started. This function should be called before the forward pass. Returns True if the step should be monitored, False otherwise."""
         # clean-up the previous step
@@ -218,7 +211,6 @@ class TrainingMonitor:
     # These functions can also be called by the monitored module
     # to log custom metrics.
     #################################################################
-
     def monitor_scalar(self, key, value):
         """Log a scalar value."""
         if self.monitor_step:
@@ -228,13 +220,19 @@ class TrainingMonitor:
                 print("Warning: logging a value while not monitoring the current step.")
 
 
+    #################################################################
+    # Activations are logged with forward hooks
+    #################################################################
     def mointor_activations(self, 
                             module :Union[str, torch.nn.Module], 
                             activations :torch.Tensor,
                             is_reference :bool = False):
-        """Monitor the activations of the module named module_name.
-        Currently we log the l2-norm of the activations.
-        """
+        """Monitor the activations of a module."""
+        if not self.is_monitoring():
+            if self.verbose:
+                print("Warning: Attempted to monitor activations of module ", module, " but not monitoring the current step.")
+            return
+
         # assert that module_name is a string
         module_name = self._module_name(module, is_reference)
 
@@ -249,9 +247,12 @@ class TrainingMonitor:
                 print(f"Warning: Attempted to monitor activations of the reference module for module {module_name}, but activations are already stored.")
                 return
             # store the activations
+            self.reference_module_activations[module_name] = activations.detach() # detach from the graph but keep on the device
+            # we are done
             return
         
         # log the l2norm of the activations    
+        # to support mini batches, we first keep all the norms in a list and average after the entire batch is done
         log_entry = f"{module_name}.activation.l2norm"
         self.log_dict[self.step].setdefault(log_entry, [])
         norm = torch.linalg.vector_norm(activations, ord=2, dim=-1, keepdim=False, out=None)  # shape [B, S]
@@ -259,14 +260,62 @@ class TrainingMonitor:
         norm = norm.flatten() # shape [B*S]
         self.log_dict[self.step][log_entry].extend(norm.tolist())
 
+        # if there is a reference module, log the difference in l2 norm between the activations of the monitored module and the reference module
+        if self.has_reference_module():
+            if module_name in self.reference_module_activations:
+                log_entry = f"{module_name}.activation.diff.l2norm"
+                if not log_entry in self.log_dict[self.step]:
+                    self.log_dict[self.step][log_entry] = []
+                ref_activation = self.reference_module_activations[module_name]
+                diff_norm = torch.linalg.vector_norm(activations - ref_activation, ord=2, dim=-1, keepdim=False, out=None)
+                diff_norm = diff_norm.detach().cpu()
+                diff_norm = diff_norm.flatten() # shape [B*S]
+                self.log_dict[self.step][log_entry].extend(diff_norm.tolist())
+            else:
+                if self.verbose:
+                    print("Warning: No reference module activations found for module ", module_name)
+
         if self.verbose:
             print("Info: Monitored activations of module ", module_name, " with shape ", activations.shape)
 
-        # if there is a reference module that has stored the corresponding activations, log the difference in l2 norm
-        # TODO
+
+    def get_forwad_hook(self):
+        def hook(module, input, output):
+            self.mointor_activations(module, output, is_reference=False)
+        return hook
+    
+
+    def get_reference_forwad_hook(self):
+        def hook(module, input, output):
+            self.mointor_activations(module, output, is_reference=True)
+        return hook
+    
+
+    def after_forward(self):
+        """This function is called after all mini-batches of a gradient step are done. It aggregates the batch statistics. """
+        if self.is_monitoring():
+            for k, v in list(self.log_dict[self.step].items()): # we iterate over a copy to modify the original dict
+                if k.endswith(".l2norm") and type(v) == list:
+                    mean = np.mean(v)
+                    std = np.std(v)  
+                    self.log_dict[self.step][k] = mean
+                    self.log_dict[self.step][k + ".std"] = std
+
+            # print total number of keys
+            if self.verbose:
+                print("Training Monitor: Total number of logging keys in the current step:", len(self.log_dict[self.step]))
+
+                # size of the dict in mb
+                import sys
+                size = sys.getsizeof(self.log_dict) / 1024 / 1024
+                print("Training Monitor: Size of log_dict in MB:", size)
 
 
-
+    #################################################################
+    # Monitor a scaled dot product attention operation
+    # This function has to be called by the monitored module
+    # We currently monitor the activations
+    #################################################################
     def monitor_scaled_dot_product_attention(self,
                                              module :Union[str, torch.nn.Module],  # the module that calls the attention function
                                              query :torch.Tensor, 
@@ -343,92 +392,9 @@ class TrainingMonitor:
         # return attn_weight @ value [This is provided in output if the user wants us to monitor the output]
 
 
-
-    #################################################################
-    # Logging of module activations with forward hooks
-    #################################################################
-
-
-    def get_reference_forwad_hook(self):
-        def hook(module, input, output):
-            if self.is_monitoring():
-                if module in self.reference_module_names:
-                    module_name = self._module_name(module, True)
-                    self.reference_module_activations[module_name] = output.detach() # detach from the graph but keep on the device
-                else:
-                    if self.verbose:
-                        print("Warning: Unknown module with output shape:", output.shape, " in reference module.")
-            
-        return hook
-
-
-    def get_forwad_hook(self):
-        def hook(module, input, output):
-            if self.is_monitoring():
-                if module in self.module_names:
-                    module_name = self._module_name(module, False)
-
-                    # log the l2 norm of the activations
-                    # to support mini batches, we first keep all the norms in a list and average after the entire batch is done
-                    log_entry = f"{module_name}.activation.l2norm"
-                    self.log_dict[self.step].setdefault(log_entry, [])
-                    norm = torch.linalg.vector_norm(output, ord=2, dim=-1, keepdim=False, out=None)  # [B, S]
-                    norm = norm.detach().cpu()
-                    norm = norm.flatten() # [B*S]
-                    self.log_dict[self.step][log_entry].extend(norm.tolist())
-
-                    # if there is a reference module, log the different in l2 norm between the activations of the monitored module and the reference module
-                    if self.reference_module is not None:
-                        if module_name in self.reference_module_activations:
-                            log_entry = f"{module_name}.activation.diff.l2norm"
-                            if not log_entry in self.log_dict[self.step]:
-                                self.log_dict[self.step][log_entry] = []
-                            ref_activation = self.reference_module_activations[module_name]
-                            diff = torch.linalg.vector_norm(output - ref_activation, ord=2, dim=-1, keepdim=False, out=None)
-                            diff = diff.detach().cpu()
-                            diff = diff.flatten()
-                            self.log_dict[self.step][log_entry] = diff.tolist()
-                        else:
-                            if self.verbose:
-                                print("Warning: No activation found for module ", module_name)
-                        
-
-                else:
-                    if self.verbose:
-                        print("Warning: Unknown module with output shape:", output.shape)
-            
-        return hook
-    
-
-    def after_forward(self):
-        """This function is called after all mini-batches of a gradient step are done. It aggregates the batch statistics. """
-        if self.is_monitoring():
-            for k, v in list(self.log_dict[self.step].items()): # we iterate over a copy to modify the original dict
-                if k.endswith(".l2norm") and type(v) == list:
-                    mean = np.mean(v)
-                    std = np.std(v)  
-                    self.log_dict[self.step][k] = mean
-                    self.log_dict[self.step][k + ".std"] = std
-
-            # print total number of keys
-            if self.verbose:
-                print("Info: Total number of keys in log_dict[step]:", len(self.log_dict[self.step]))
-
-                # size of the dict in mb
-                import sys
-                size = sys.getsizeof(self.log_dict[self.step]) / 1024 / 1024
-                print("Info: Size of log_dict[step] in MB:", size)
-
-
-
-
-
-
     #################################################################
     # Logging of gradients
     #################################################################
-
-
     def monitor_gradients(self, before_clip=False):
         if self.is_monitoring():
             for name, param in self.module.named_parameters():
@@ -450,8 +416,6 @@ class TrainingMonitor:
     #################################################################
     # Logging of parameters
     #################################################################
-
-
     def monitor_parameters(self):
         if self.is_monitoring():
             for name, param in self.module.named_parameters():
@@ -476,7 +440,6 @@ class TrainingMonitor:
     #################################################################
     # Internal helper functions
     #################################################################
-
     def _module_name(self, module :Union[str, torch.nn.Module], is_reference :bool):
         """Look up the name of a torch.nn.Module in the appropriate dict."""
         module_name = module
