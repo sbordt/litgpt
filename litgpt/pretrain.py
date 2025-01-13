@@ -1,5 +1,9 @@
 # Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file.
 
+#
+# we take this default litgpt pre-trainign script and modify it to monitor the training process of the model
+#
+
 import math
 import pprint
 import time
@@ -41,6 +45,8 @@ from litgpt.utils import (
     save_hyperparameters,
 )
 
+from litgpt.monitor import TrainingMonitor
+
 
 def setup(
     model_name: str,
@@ -66,8 +72,9 @@ def setup(
     devices: Union[int, str] = "auto",
     num_nodes: int = 1,
     tokenizer_dir: Optional[Path] = None,
-    logger_name: Literal["wandb", "tensorboard", "csv"] = "tensorboard",
+    logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
+    training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training  
 ):
     """Pretrain a model.
 
@@ -127,7 +134,7 @@ def setup(
     tokenizer = Tokenizer(tokenizer_dir) if tokenizer_dir is not None else None
 
     logger = choose_logger(
-        logger_name, out_dir, name=f"pretrain-{config.name}", resume=bool(resume), log_interval=train.log_interval
+        logger_name, out_dir, name=f"pretrain-{config.name}", resume=bool(resume), log_interval=train.log_interval, entity="mup_limitations"
     )
 
     if devices * num_nodes > 1:
@@ -166,6 +173,7 @@ def setup(
         train,
         eval,
         optimizer,
+        training_monitor,
     )
 
 
@@ -183,6 +191,7 @@ def main(
     train: TrainArgs,
     eval: EvalArgs,
     optimizer: Union[str, Dict],
+    training_monitor :TrainingMonitor = None,
 ) -> None:
     validate_args(train, eval, initial_checkpoint_dir, resume)
 
@@ -194,8 +203,10 @@ def main(
     t0 = time.perf_counter()
     with fabric.init_module(empty_init=True):
         model = GPT(config)
+        reference_model = GPT(config) # the reference model is the model with the weights at time step zero
 
     initialize_weights(fabric, model, n_layer=config.n_layer, n_embd=config.n_embd)
+    reference_model.load_state_dict(model.state_dict()) 
 
     if train.tie_embeddings:
         model.transformer.wte.weight = model.lm_head.weight
@@ -205,8 +216,12 @@ def main(
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters: {num_parameters(model):,}")
 
-    model = torch.compile(model)
+    # turn off compilation because it leads to warnings with the hooks that I would like to understand better (?)
+    #model = torch.compile(model)
     model = fabric.setup(model)
+
+    #reference_model = torch.compile(reference_model)
+    reference_model = fabric.setup(reference_model)
 
     extra_kwargs = {"fused": fabric.device.type == "cuda"}
     optimizer = instantiate_torch_optimizer(optimizer, model.parameters(), **extra_kwargs)
@@ -220,11 +235,22 @@ def main(
 
     state = {
         "model": model,
+        "reference_model": reference_model,
         "optimizer": optimizer,
         "train_dataloader": train_dataloader,
         "iter_num": 0,
         "step_count": 0,
     }
+
+    # lenght of training and validation dataloaders
+    fabric.print(f"Training dataloader length: {len(train_dataloader)}")
+    fabric.print(f"Validation dataloader length: {len(val_dataloader)}")
+
+    # first  batch of data
+    fabric.print(f"First batch of data: {next(iter(train_dataloader))}")
+
+    # shape of the first batch of data
+    fabric.print(f"Shape of the first batch of data: {next(iter(train_dataloader)).shape}") 
 
     resume = find_resume_path(resume, out_dir)
     if resume:
@@ -232,7 +258,7 @@ def main(
         fabric.load(resume, state)
 
     train_time = time.perf_counter()
-    fit(fabric, devices, state, train_dataloader, val_dataloader, out_dir, tokenizer_dir, train, eval)
+    fit(fabric, devices, state, train_dataloader, val_dataloader, out_dir, tokenizer_dir, train, eval, training_monitor)
 
     # Save final checkpoint
     save_checkpoint(fabric, state, tokenizer_dir, out_dir / "final" / "lit_model.pth")
@@ -254,7 +280,6 @@ def main(
         fabric.print(f"| - Memory Used   : {memory_used:.2f} GB")
     fabric.print(separator)
 
-
 def fit(
     fabric: L.Fabric,
     devices: int,
@@ -265,8 +290,10 @@ def fit(
     tokenizer_dir: Optional[Path],
     train: TrainArgs,
     eval: EvalArgs,
+    training_monitor :TrainingMonitor = None,
 ) -> None:
     model = state["model"]
+    reference_model = state["reference_model"]
     optimizer = state["optimizer"]
 
     if eval.initial_validation:
@@ -303,6 +330,13 @@ def fit(
 
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
+    # monitor the training
+    training_monitor.set_module(model)
+    training_monitor.set_reference_module(reference_model)
+
+    # mointoring of the first step
+    training_monitor.set_step(state["step_count"]+1)
+
     for train_data in train_iterator:
         if state["iter_num"] >= max_iters:
             break
@@ -319,15 +353,34 @@ def fit(
         targets = train_data[:, 1 : (model.max_seq_length + 1)].contiguous().long()
 
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
+
+        # monitor the first forward pass in detail
+        if state["iter_num"] == 1:
+            training_monitor.set_verbose(True)
+
         with fabric.no_backward_sync(model, enabled=is_accumulating):
+            # if we are monitoring the training step, we need to perform a forward pass with the reference model
+            # currently, we assume that all tensors and models are on the same device
+            if training_monitor.is_monitoring():
+                with torch.no_grad():
+                    _ = reference_model(input_ids)
+
+            # (micro-) batch for the model
             logits = model(input_ids)
             loss = chunked_cross_entropy(logits, targets)
             fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
         running_loss.update(loss.detach())
+        training_monitor.clear_reference_activations()
+        training_monitor.set_verbose(False)
 
         if not is_accumulating:
+            # the forward passes are over
+            training_monitor.after_forward()
+
+            training_monitor.monitor_gradients(before_clip=True)
             fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
+            training_monitor.monitor_gradients()
             optimizer.step()
             optimizer.zero_grad()
             state["step_count"] += 1
@@ -368,6 +421,7 @@ def fit(
 
             throughput_metrics = throughput.compute()
             metrics.update(throughput_metrics)
+            metrics.update(training_monitor.get_step_metrics())
             fabric.log_dict(metrics, step=state["iter_num"] - 1)
 
         if val_dataloader is not None and not is_accumulating and state["step_count"] % eval.interval == 0:
@@ -383,6 +437,10 @@ def fit(
 
         if train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0:
             save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
+
+        # advance the training monitor to the gradient next step
+        if not is_accumulating:
+            training_monitor.set_step(state["step_count"]+1)
 
     # Final validation
     if eval.final_validation:
