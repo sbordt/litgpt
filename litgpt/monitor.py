@@ -1,6 +1,4 @@
 # Monitor the training of pytorch modules.
-
-
 import torch
 import numpy as np
 import math
@@ -113,7 +111,9 @@ class TrainingMonitor:
         self.module = module
         for name, m in module.named_modules():
             self.module_names[m] = format_module_name(name)
-            self.module_hooks[m] = m.register_forward_hook(self.get_forwad_hook())
+            self.module_hooks[m] = m.register_forward_hook(self.get_forwad_hook(self.module_names[m]))
+            if self.verbose:
+                print("Info: Registered forward hook for module ", name)
             # if the module implements the MonitoredModule interface, set the training monitor
             if isinstance(m, MonitoredModule):
                 m.set_training_monitor(self, False)
@@ -279,9 +279,9 @@ class TrainingMonitor:
             print("Info: Monitored activations of module ", module_name, " with shape ", activations.shape)
 
 
-    def get_forwad_hook(self):
+    def get_forwad_hook(self, module_name : str):
         def hook(module, input, output):
-            self.mointor_activations(module, output, is_reference=False)
+            self.mointor_activations(module_name, output, is_reference=False)
         return hook
     
 
@@ -289,6 +289,11 @@ class TrainingMonitor:
         def hook(module, input, output):
             self.mointor_activations(module, output, is_reference=True)
         return hook
+    
+
+    def clear_reference_activations(self):
+        """Clear the reference module activations. To be called after a mini-batch is done."""
+        self.reference_module_activations = {}
     
 
     def after_forward(self):
@@ -440,7 +445,7 @@ class TrainingMonitor:
     #################################################################
     # Internal helper functions
     #################################################################
-    def _module_name(self, module :Union[str, torch.nn.Module], is_reference :bool):
+    def _module_name(self, module :Union[str, torch.nn.Module], is_reference :bool) -> str:
         """Look up the name of a torch.nn.Module in the appropriate dict."""
         module_name = module
         if isinstance(module_name, str): # when the module name is already provided as a string
@@ -449,7 +454,9 @@ class TrainingMonitor:
         if is_reference:
             module_name = self.reference_module_names[module]
         else:
+            if not module in self.module_names:
+                print("Warning: Module ", module, " not found in the module names dict.")
+                return "[unknown module]"
             module_name = self.module_names[module]
-        assert module_name is not None
         assert isinstance(module_name, str)
         return module_name

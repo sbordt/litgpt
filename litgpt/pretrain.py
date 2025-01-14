@@ -75,6 +75,7 @@ def setup(
     logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
     training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training  
+    initialize_weights_fn: Optional[callable] = None,
 ):
     """Pretrain a model.
 
@@ -102,6 +103,9 @@ def setup(
         logger_name: The name of the logger to send metrics to.
         seed: The random seed to use for reproducibility.
     """
+    if initialize_weights_fn is None:
+        initialize_weights_fn = initialize_weights
+
     if model_name == "list":
         available_models = "\n".join(sorted(name_to_config))
         print(f"Available values:\n{available_models}")
@@ -174,6 +178,7 @@ def setup(
         eval,
         optimizer,
         training_monitor,
+        initialize_weights_fn,
     )
 
 
@@ -192,7 +197,11 @@ def main(
     eval: EvalArgs,
     optimizer: Union[str, Dict],
     training_monitor :TrainingMonitor = None,
+    initialize_weights_fn: Optional[callable] = None,
 ) -> None:
+    if initialize_weights_fn is None:
+        initialize_weights_fn = initialize_weights
+
     validate_args(train, eval, initial_checkpoint_dir, resume)
 
     if fabric.global_rank == 0:
@@ -203,10 +212,10 @@ def main(
     t0 = time.perf_counter()
     with fabric.init_module(empty_init=True):
         model = GPT(config)
-        reference_model = GPT(config) # the reference model is the model with the weights at time step zero
+        reference_model = GPT(config) 
 
-    initialize_weights(fabric, model, n_layer=config.n_layer, n_embd=config.n_embd)
-    reference_model.load_state_dict(model.state_dict()) 
+    initialize_weights_fn(fabric, model, n_layer=config.n_layer, n_embd=config.n_embd)
+    reference_model.load_state_dict(model.state_dict()) # the reference model is the model with the weights at time step zero
 
     if train.tie_embeddings:
         model.transformer.wte.weight = model.lm_head.weight
