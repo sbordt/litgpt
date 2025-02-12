@@ -537,9 +537,10 @@ def save_checkpoint(fabric, state, tokenizer_dir, checkpoint_file):
     fabric.print(f"Saving checkpoint to {str(checkpoint_file)!r}")
     fabric.save(checkpoint_file, state)
     if fabric.global_rank == 0:
-        save_hyperparameters(setup, checkpoint_file.parent)
-        if tokenizer_dir is not None:
-            copy_config_files(tokenizer_dir, checkpoint_file.parent)
+        # this assumes we are calling pretrain.py as a script, but not how we are using it
+        # save_hyperparameters(setup, checkpoint_file.parent)
+        # if tokenizer_dir is not None:
+        #     copy_config_files(tokenizer_dir, checkpoint_file.parent)
         save_config(model.config, checkpoint_file.parent)
 
 
