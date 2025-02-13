@@ -178,8 +178,10 @@ class TrainingMonitor:
         # do we monitor this step?
         self.step = step
         self.monitor_step = step % self.monitor_interval == 1
-        if step <= 20:
-            self.monitor_step = True
+        if not self.monitor_step and step <= 20: # more frequent monitoring for the first 100 steps
+            self.monitor_step = step % 5 == 1
+        if not self.monitor_step and step <= 100:
+            self.monitor_step = step % 20 == 1
 
         # if we monitor this step, create a new entry in the log dict
         # also monitor the parameters
