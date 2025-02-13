@@ -65,7 +65,8 @@ class TrainingMonitor:
                  module = None,
                  reference_module = None,
                  monitor_interval = 20,
-                 step_start = 0): 
+                 step_start = 0,
+                 monitor = True): 
         """Init the training monitor."""
         self.module = None
         self.module_hooks = {}
@@ -80,6 +81,7 @@ class TrainingMonitor:
         self.verbose = False
         self.monitor_interval = monitor_interval
         self.step = step_start
+        self.monitor = monitor
         self.monitor_step = False # do we monitor the current gradient step?
         self.log_dict = {} # a dict to log the parameters, activations, etc. of all gradient steps. maps the step number to the log dict of that step.
 
@@ -182,6 +184,9 @@ class TrainingMonitor:
             self.monitor_step = step % 5 == 1
         if not self.monitor_step and step <= 100:
             self.monitor_step = step % 20 == 1
+
+        if not self.monitor: # global toggle to turn monitoring off
+            self.monitor_step = False
 
         # if we monitor this step, create a new entry in the log dict
         # also monitor the parameters
