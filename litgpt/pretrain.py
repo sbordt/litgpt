@@ -246,12 +246,14 @@ def main(
 
     state = {
         "model": model,
-        "reference_model": reference_model,
         "optimizer": optimizer,
         "train_dataloader": train_dataloader,
         "iter_num": 0,
         "step_count": 0,
     }
+
+    # save the initial state (to store the initial weights of the model)
+    save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
 
     # lenght of training and validation dataloaders
     fabric.print(f"Training dataloader length: {len(train_dataloader)}")
@@ -302,9 +304,9 @@ def fit(
     train: TrainArgs,
     eval: EvalArgs,
     training_monitor :TrainingMonitor = None,
+    reference_model: Optional[nn.Module] = None,
 ) -> None:
     model = state["model"]
-    reference_model = state["reference_model"]
     optimizer = state["optimizer"]
 
     if eval.initial_validation:

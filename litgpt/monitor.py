@@ -5,12 +5,13 @@ import math
 from typing import Union
 
 
-def format_module_name(name):
+def format_module_name(name: str):
     if name == "" or name == "_orig_mod":
         return "[root module]"
-    return name.removeprefix("_forward_module.").removeprefix("_orig_mod.").removeprefix("_fsdp_wrapped_module.")
+    for s in ["_forward_module.", "_orig_mod.", "_fsdp_wrapped_module."]:
+        name = name.replace(s, "")
+    return name
     
-
 
 class MonitoredModule:
     """A torch.nn.Module can subclass this class to monitor custom metrics during training.
