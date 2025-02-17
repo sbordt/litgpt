@@ -189,11 +189,9 @@ class TrainingMonitor:
             self.monitor_step = False
 
         # if we monitor this step, create a new entry in the log dict
-        # also monitor the parameters
         if self.monitor_step: 
             self.log_dict[step] = {}
-            self.monitor_parameters()
-
+            
         return self.monitor_step
     
 
@@ -211,6 +209,55 @@ class TrainingMonitor:
     def get_all_metrics(self):
         """Return the full log dict with all steps that have been logged so far."""
         return self.log_dict
+
+
+    def condensed_log_dict(self):
+        """Take the log_dict which has the form
+        {
+            step1: {"key1": value1, "key2": value2},
+            step2: {"key1": value1, "key2": value2},
+        }
+
+        and return a new dict of the form
+        {
+            "key1": {step1: value1, step2: value2},
+            "key2": {step1: value1, step2: value2},
+        }
+        """
+        new_dict = {}
+        for key, value in self.log_dict.items():
+            for name, val in value.items():
+                if name not in new_dict:
+                    new_dict[name] = {}
+                new_dict[name][key] = val
+        return new_dict
+
+
+    def save_hdf5(self, filename, condensed=True):
+        """Save the log dict as hdf5."""
+        import h5py
+
+        log_dict = self.log_dict
+        if condensed:
+            log_dict = self.condensed_log_dict()
+
+        with h5py.File(filename, 'w') as f:
+            for parameter, value_dict in log_dict.items():
+                # Create a group for each parameter
+                group = f.create_group(parameter)
+                print(parameter)
+
+                # Save keys and values separately, converting to list first
+                # This avoids numpy array conversion issues
+                keys = list(value_dict.keys())
+                values = list(value_dict.values())
+
+                keys = np.array(keys, dtype=np.float64)
+                values = np.array(values, dtype=np.float64)
+
+                print(keys.shape, values.shape)
+                group.create_dataset('keys', data=keys)
+                group.create_dataset('values', data=values)
 
 
     #################################################################

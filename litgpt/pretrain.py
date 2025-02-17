@@ -384,12 +384,26 @@ def fit(
         training_monitor.set_verbose(False)
 
         if not is_accumulating:
-            # the forward passes are over
-            training_monitor.after_forward()
+            training_monitor.after_forward() # the forward passes are over, gather activation statistics
 
-            training_monitor.monitor_gradients(before_clip=True)
+            if fabric.world_size > 1: # FSDP requires parameter and gradient gathering for monitoring
+                if fabric.global_rank == 0 and training_monitor.is_monitoring(): # gather only if we are monitoring
+                    with model.summon_full_params(rank0_only=True, offload_to_cpu=True, with_grads=True):
+                        training_monitor.monitor_parameters()                       
+                        training_monitor.monitor_gradients(before_clip=True)
+            else:
+                training_monitor.monitor_parameters()
+                training_monitor.monitor_gradients(before_clip=True)
+            
             fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
-            training_monitor.monitor_gradients()
+
+            if fabric.world_size > 1: # same as above
+                if fabric.global_rank == 0 and training_monitor.is_monitoring():
+                    with model.summon_full_params(rank0_only=True, offload_to_cpu=True, with_grads=True):
+                        training_monitor.monitor_gradients()
+            else:
+                training_monitor.monitor_gradients()
+            
             optimizer.step()
             optimizer.zero_grad()
             state["step_count"] += 1
@@ -450,6 +464,7 @@ def fit(
         # advance the training monitor to the gradient next step
         if not is_accumulating:
             training_monitor.set_step(state["step_count"]+1)
+
 
     # Final validation
     if eval.final_validation:
