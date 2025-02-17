@@ -390,10 +390,11 @@ def fit(
 
             if fabric.world_size > 1: # FSDP requires parameter and gradient gathering for monitoring
                 if training_monitor.is_monitoring(): # gather only if we are monitoring
-                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True) | FullyShardedDataParallel.summon_full_params(reference_model):
-                        if fabric.global_rank == 0:
-                            training_monitor.monitor_parameters()                       
-                            training_monitor.monitor_gradients(before_clip=True)
+                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True):
+                        with FullyShardedDataParallel.summon_full_params(reference_model):
+                            if fabric.global_rank == 0:
+                                training_monitor.monitor_parameters()                       
+                                training_monitor.monitor_gradients(before_clip=True)
             else:
                 training_monitor.monitor_parameters()
                 training_monitor.monitor_gradients(before_clip=True)
@@ -402,9 +403,10 @@ def fit(
 
             if fabric.world_size > 1: # same as above
                 if training_monitor.is_monitoring(): # gather only if we are monitoring
-                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True) | FullyShardedDataParallel.summon_full_params(reference_model):
-                        if fabric.global_rank == 0:
-                            training_monitor.monitor_gradients()
+                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True):
+                        with FullyShardedDataParallel.summon_full_params(reference_model):
+                            if fabric.global_rank == 0:
+                                training_monitor.monitor_gradients()
             else:
                 training_monitor.monitor_gradients()
             
