@@ -252,9 +252,6 @@ def main(
         "step_count": 0,
     }
 
-    # save the initial state (to store the initial weights of the model)
-    save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
-
     # lenght of training and validation dataloaders
     fabric.print(f"Training dataloader length: {len(train_dataloader)}")
     fabric.print(f"Validation dataloader length: {len(val_dataloader)}")
@@ -466,7 +463,7 @@ def fit(
             fabric.log_dict(metrics, step=state["step_count"])
             fabric.barrier()
 
-        if train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0:
+        if (train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0) or (state["step_count"] == 0 and state["iter_num"] == 1):
             save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
 
         # advance the training monitor to the gradient next step
