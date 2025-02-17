@@ -21,6 +21,8 @@ from torch.utils.data import DataLoader
 from torchmetrics.aggregation import RunningMean
 from typing_extensions import Literal
 
+from distributed.fsdp import FullyShardedDataParallel
+
 from litgpt import Tokenizer
 from litgpt.args import EvalArgs, TrainArgs
 from litgpt.config import name_to_config
@@ -388,7 +390,7 @@ def fit(
 
             if fabric.world_size > 1: # FSDP requires parameter and gradient gathering for monitoring
                 if fabric.global_rank == 0 and training_monitor.is_monitoring(): # gather only if we are monitoring
-                    with model.summon_full_params(rank0_only=True, offload_to_cpu=True, with_grads=True):
+                    with FullyShardedDataParallel.summon_full_params(model, rank0_only=True, offload_to_cpu=True, with_grads=True):
                         training_monitor.monitor_parameters()                       
                         training_monitor.monitor_gradients(before_clip=True)
             else:
