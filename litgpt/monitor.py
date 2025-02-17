@@ -8,7 +8,7 @@ from typing import Union
 def format_module_name(name):
     if name == "" or name == "_orig_mod":
         return "[root module]"
-    return name.removeprefix("_forward_module.").removeprefix("_orig_mod.")
+    return name.removeprefix("_forward_module.").removeprefix("_orig_mod.").removeprefix("_fsdp_wrapped_module.")
     
 
 
