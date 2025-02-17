@@ -389,10 +389,11 @@ def fit(
             training_monitor.after_forward() # the forward passes are over, gather activation statistics
 
             if fabric.world_size > 1: # FSDP requires parameter and gradient gathering for monitoring
-                if fabric.global_rank == 0 and training_monitor.is_monitoring(): # gather only if we are monitoring
-                    with FullyShardedDataParallel.summon_full_params(model, rank0_only=True, offload_to_cpu=True, with_grads=True):
-                        training_monitor.monitor_parameters()                       
-                        training_monitor.monitor_gradients(before_clip=True)
+                if training_monitor.is_monitoring(): # gather only if we are monitoring
+                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True):
+                        if fabric.global_rank == 0:
+                            training_monitor.monitor_parameters()                       
+                            training_monitor.monitor_gradients(before_clip=True)
             else:
                 training_monitor.monitor_parameters()
                 training_monitor.monitor_gradients(before_clip=True)
@@ -400,9 +401,10 @@ def fit(
             fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
 
             if fabric.world_size > 1: # same as above
-                if fabric.global_rank == 0 and training_monitor.is_monitoring():
-                    with model.summon_full_params(rank0_only=True, offload_to_cpu=True, with_grads=True):
-                        training_monitor.monitor_gradients()
+                if training_monitor.is_monitoring(): # gather only if we are monitoring
+                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True):
+                        if fabric.global_rank == 0:
+                            training_monitor.monitor_gradients()
             else:
                 training_monitor.monitor_gradients()
             
