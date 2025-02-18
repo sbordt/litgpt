@@ -242,13 +242,6 @@ def main(
             with FullyShardedDataParallel.summon_full_params(reference_model):
                 reference_model.load_state_dict(model.state_dict())
 
-        with FullyShardedDataParallel.summon_full_params(model):
-            with FullyShardedDataParallel.summon_full_params(reference_model):
-                for (n1, p1), (n2, p2) in zip(model.named_parameters(), reference_model.named_parameters()):
-                    diff = (p1 - p2).abs().max()
-                    if diff > 0:
-                        print(f"Difference in {n1}: {diff}")
-
     extra_kwargs = {"fused": fabric.device.type == "cuda"}
     optimizer = instantiate_torch_optimizer(optimizer, model.parameters(), **extra_kwargs)
     optimizer = fabric.setup_optimizers(optimizer)

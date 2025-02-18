@@ -2,7 +2,7 @@
 import torch
 import numpy as np
 import math
-from typing import Union
+from typing import Union, List
 
 
 def format_module_name(name: str):
@@ -494,6 +494,48 @@ class TrainingMonitor:
                 if self.verbose:
                     print("Info: Parameter ", name, " has shape ", param.shape, " with l2 norm ", norm, "(logged as ", log_entry, ")") 
         
+
+    #################################################################
+    # Merge another log dict from a distributed traing run.
+    #     
+    # With FSDP, we monitor activations and their 
+    # differences on each gpu separately, then merge them into rank0
+    # after training.
+    #################################################################
+    def merge_log_dicts(self, other_log_dicts: List[dict]):
+        """Note: For the math to be valid, we need to merge all distributed log dicts in one step."""
+        from copy import deepcopy
+        new_log_dict = deepcopy(self.log_dict)
+
+        for step, step_logs in new_log_dict.items():
+            for key, value in step_logs.items():
+                # means
+                if key.endswith("activation.l2norm") or \
+                   key.endswith("activation.diff.l2norm"):
+                    means = [value]
+                    for other_log_dict in other_log_dicts:
+                         means.append(other_log_dict[step][key])
+                    mean = np.mean(means)
+                    new_log_dict[step][key] = mean
+                # standard deviations
+                elif key.endswith("activation.l2norm.std") or \
+                     key.endswith("activation.diff.l2norm.std"):
+                    # gather the stds
+                    stds = [value]
+                    for other_log_dict in other_log_dicts:
+                        stds.append(other_log_dict[step][key])
+                    # now gather the means
+                    means_key = key.removesuffix(".std")
+                    means = [step_logs[means_key]]
+                    for other_log_dict in other_log_dicts:
+                         means.append(other_log_dict[step][means_key])
+                    mean = np.mean(means)
+                    # compute σ² = [(σ₁² + (μ₁ - μ)²) + (σ₂² + (μ₂ - μ)²) + ...]/n
+                    std = np.mean([s**2 + (m - mean)**2 for s, m in zip(stds, means)])**0.5
+                    new_log_dict[step][key] = std
+
+        self.log_dict = new_log_dict # successfull merge
+
 
 
     #################################################################
