@@ -256,7 +256,6 @@ class TrainingMonitor:
                 keys = np.array(keys, dtype=np.float64)
                 values = np.array(values, dtype=np.float64)
 
-                print(keys.shape, values.shape)
                 group.create_dataset('keys', data=keys)
                 group.create_dataset('values', data=values)
 

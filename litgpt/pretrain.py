@@ -234,6 +234,21 @@ def main(
     #reference_model = torch.compile(reference_model)
     reference_model = fabric.setup(reference_model)
 
+    # lightning performs re-initialization of model weights with FSDP.
+    # we need to re-load the weights of the reference model
+    # After both models are FSDP wrapped and setup
+    if isinstance(fabric.strategy, FSDPStrategy):
+        with FullyShardedDataParallel.summon_full_params(model):
+            with FullyShardedDataParallel.summon_full_params(reference_model):
+                reference_model.load_state_dict(model.state_dict())
+
+        with FullyShardedDataParallel.summon_full_params(model):
+            with FullyShardedDataParallel.summon_full_params(reference_model):
+                for (n1, p1), (n2, p2) in zip(model.named_parameters(), reference_model.named_parameters()):
+                    diff = (p1 - p2).abs().max()
+                    if diff > 0:
+                        print(f"Difference in {n1}: {diff}")
+
     extra_kwargs = {"fused": fabric.device.type == "cuda"}
     optimizer = instantiate_torch_optimizer(optimizer, model.parameters(), **extra_kwargs)
     optimizer = fabric.setup_optimizers(optimizer)
