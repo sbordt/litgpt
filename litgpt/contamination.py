@@ -2,7 +2,7 @@
 # 
 # We decorate (monkey-patch) the read method of the BinaryReader to modify samples on-the-fly.
 #
-# This is how the relevant part of litdata works:
+# This is how the relevant part of litdata works (tested with litdata version 0.28.0).
 #
 # litdata.StreamingDataset:  Has a member cache of type litdata.streaming.Cache.
 # -------------------------  Has a function self._create_cache that creates the cache.
@@ -50,7 +50,7 @@ class ContaminationScheduler(ABC):
         pass
 
 
-class DictContaminationScheduler:
+class DictContaminationScheduler(ContaminationScheduler):
     """
     A class that holds a dictionary mapping integer indices to flat torch.Tensors.
     When contaminate(...) is called, it replaces the corresponding slices in the
