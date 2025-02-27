@@ -16,6 +16,8 @@ from typing_extensions import Self
 from litgpt.config import Config
 from litgpt.monitor import MonitoredModule
 
+from litgpt.mup import has_mup_enabled
+
 
 class GPT(nn.Module):
     def __init__(self, config: Config) -> None:
@@ -96,9 +98,20 @@ class GPT(nn.Module):
         if self.config.scale_embeddings:
             x = x * torch.tensor(self.config.n_embd**0.5, dtype=x.dtype)
 
+        ### Begin muP code ### Input Scaling
+        if has_mup_enabled(self.config):
+            x *= self.config.mup_args.input_alpha
+        ### End muP code ###
+
         for block in self.transformer.h:
             x = block(x, cos, sin, mask, input_pos)
         x = self.transformer.ln_f(x)
+
+        ### Begin muP code ### Output Scaling
+        if has_mup_enabled(self.config):
+            x *= self.config.mup_args.output_alpha / self.config.mup_args.width_multiplier
+        ### End muP code ###
+
         x = self.lm_head(x)  # (b, t, vocab_size)
         if self.config.final_logit_softcapping is not None:
             x = torch.tanh(x / self.config.final_logit_softcapping) * self.config.final_logit_softcapping
@@ -334,6 +347,15 @@ class CausalSelfAttention(nn.Module, MonitoredModule):
         self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         scale = 1.0 / math.sqrt(self.config.attention_scores_scalar or self.config.head_size)
+
+        ### Begin muP code ###
+        if has_mup_enabled(self.config):
+            if self.config.attention_scores_scalar is not None:
+                raise NotImplementedError("Attention scores scalar is not supported with muP")
+            if self.attention_logit_softcapping is not None:
+                raise NotImplementedError("Attention logit softcapping is not supported with muP")
+            scale = 1.0 / self.config.head_size
+        ### End muP code ###
 
         # with softcapping we cannot use SDPA
         if self.config.attention_logit_softcapping is not None:

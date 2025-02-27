@@ -48,6 +48,7 @@ from litgpt.utils import (
 )
 
 from litgpt.monitor import TrainingMonitor
+from litgpt.mup import has_mup_enabled, instantiate_torch_mup_optimizer
 
 
 def setup(
@@ -243,7 +244,10 @@ def main(
                 reference_model.load_state_dict(model.state_dict())
 
     extra_kwargs = {"fused": fabric.device.type == "cuda"}
-    optimizer = instantiate_torch_optimizer(optimizer, model.parameters(), **extra_kwargs)
+    if has_mup_enabled(config):
+        optimizer = instantiate_torch_mup_optimizer(optimizer, model, **extra_kwargs)
+    else:
+        optimizer = instantiate_torch_optimizer(optimizer, model.parameters(), **extra_kwargs)
     optimizer = fabric.setup_optimizers(optimizer)
 
     train_dataloader, val_dataloader = get_dataloaders(fabric, data, tokenizer, train, model.max_seq_length)
@@ -363,6 +367,11 @@ def fit(
         lr = get_lr(optimizer.defaults["lr"], state["iter_num"], warmup_iters, max_iters, train.min_lr)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
+            ### Begin muP code ###
+            if "lr_scale" in param_group:
+                param_group["lr"] *= param_group["lr_scale"]
+                print(f"lr_scale: {param_group['lr_scale']}")
+            ### End muP code ###
 
         state["iter_num"] += 1
         iter_t0 = time.perf_counter()
