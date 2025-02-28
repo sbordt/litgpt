@@ -17,18 +17,21 @@ import inspect
 @dataclass
 class MuPArgs:
     """Arguments for training with Maximal Update Parametrization (μP)
-    
+
     Inspired by https://github.com/EleutherAI/nanoGPT-mup/
     """
 
+    enabled: bool = False
     """Whether to use muP. If False then all other mup variables are ignored"""
-    enabled = False
+
+    width_multiplier: float = 1.0
     """mup_width_multiplier = width / base_width where base_width is typically 256"""
-    width_multiplier = 1.0
+
+    input_alpha: float = 1.0
     """Tunable multiplier applied to input embedding forward pass output"""
-    input_alpha = 1.0
+
+    output_alpha: float = 1.0
     """Tunable multiplier applied to output unembedding forward pass output"""
-    output_alpha = 1.0
 
 
 def _add_mup_args_to_config(config: Config, mup_args: MuPArgs) -> Config:
@@ -69,13 +72,13 @@ def apply_mup(config : Config,
         raise ValueError("Model has already been scaled with muP. Aborting because this could inidcate an error.")
     # currently we only support the pythia models
     # would need to check the details of other models to see if anything needs to be adjusted for muP
-    if not "pythia-" in config.model_name:
+    if not "pythia-" in config.name:
         raise ValueError("Currently only pythia models are supported for muP")
     # adjust model parameters
     width_multiplier = width / config.n_embd
     config = scale_width(config, width)
     # add mup args to config
-    mup_args = MuPArgs(enabled=True, width_multiplier=width_multiplier, input_alpha=input_alpha, output_alpha=output_alpha)
+    mup_args = MuPArgs(True, width_multiplier, input_alpha, output_alpha)
     config = _add_mup_args_to_config(config, mup_args)
     return config
 
@@ -124,6 +127,13 @@ def initialize_mup_weights(fabric: L.Fabric, model, n_layer: int, n_embd: int) -
         if isinstance(mod, (LLaMAMLP, CausalSelfAttention)):
             mod.proj.reset_parameters = partial(init_weights, mod.proj, std=(1 / math.sqrt(n_embd) / n_layer))
 
+    # print the type of model
+    print(f"Model type: {type(model)}")
+    # does model have a confit attribute?
+    print(f"Model has config attribute: {hasattr(model, 'config')}")
+    # does model.config have a mup_args attribute?
+    print(f"Model has mup_args attribute: {hasattr(model.config, 'mup_args')}")
+
     # set the output layer weights to zero
     if has_mup_enabled(model.config):
         model.lm_head.reset_parameters = partial(init_weights, model.lm_head, std=0.0)
@@ -151,7 +161,7 @@ def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
 
     if not has_mup_enabled(model.config):
         print("WARNING: MuP is not enabled. Ignoring MuP optimizer instantiation.")
-        return instantiate_class(model.parameters(), optimizer, **kwargs)
+        return instantiate_class(model.parameters(), optimizer)
 
     # define parameter groups for mup
     param_dict = {pn: p for pn, p in model.named_parameters()}
@@ -173,7 +183,7 @@ def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
     print(f"MuP parameters: {sum(p.numel() for p in mup_params if p.requires_grad)}")
     print(f"Other parameters: {sum(p.numel() for p in other_params if p.requires_grad)}")
 
-    return instantiate_class(optim_groups, optimizer, **kwargs)
+    return instantiate_class(optim_groups, optimizer)
 
 
 def count_parameters(parameters):
@@ -185,6 +195,8 @@ def print_parameter_info(model):
     param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
     print("Total number of parameters:", count_parameters(param_dict.values()))
     print("Total number of trainable parameters:", count_parameters(param_dict.values()))
+
+    
 
 
 

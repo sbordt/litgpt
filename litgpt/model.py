@@ -352,7 +352,7 @@ class CausalSelfAttention(nn.Module, MonitoredModule):
         if has_mup_enabled(self.config):
             if self.config.attention_scores_scalar is not None:
                 raise NotImplementedError("Attention scores scalar is not supported with muP")
-            if self.attention_logit_softcapping is not None:
+            if self.config.attention_logit_softcapping is not None:
                 raise NotImplementedError("Attention logit softcapping is not supported with muP")
             scale = 1.0 / self.config.head_size
         ### End muP code ###

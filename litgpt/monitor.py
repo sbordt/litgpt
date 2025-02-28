@@ -305,11 +305,19 @@ class TrainingMonitor:
             # we are done
             return
         
+        # log the l1norm of the activations    
+        log_entry = f"{module_name}.activation.l1norm"
+        self.log_dict[self.step].setdefault(log_entry, [])
+        norm = torch.linalg.vector_norm(activations, ord=1, dim=-1, keepdim=False, out=None)  # output has shape [B, S]
+        norm = norm.detach().cpu()
+        norm = norm.flatten() # shape [B*S]
+        self.log_dict[self.step][log_entry].extend(norm.tolist())
+        
         # log the l2norm of the activations    
         # to support mini batches, we first keep all the norms in a list and average after the entire batch is done
         log_entry = f"{module_name}.activation.l2norm"
         self.log_dict[self.step].setdefault(log_entry, [])
-        norm = torch.linalg.vector_norm(activations, ord=2, dim=-1, keepdim=False, out=None)  # shape [B, S]
+        norm = torch.linalg.vector_norm(activations, ord=2, dim=-1, keepdim=False, out=None)  # output has shape [B, S]
         norm = norm.detach().cpu()
         norm = norm.flatten() # shape [B*S]
         self.log_dict[self.step][log_entry].extend(norm.tolist())
@@ -323,7 +331,7 @@ class TrainingMonitor:
                 ref_activation = self.reference_module_activations[module_name]
                 diff_norm = torch.linalg.vector_norm(activations - ref_activation, ord=2, dim=-1, keepdim=False, out=None)
                 diff_norm = diff_norm.detach().cpu()
-                diff_norm = diff_norm.flatten() # shape [B*S]
+                diff_norm = diff_norm.flatten()
                 self.log_dict[self.step][log_entry].extend(diff_norm.tolist())
             else:
                 if self.verbose:
@@ -354,7 +362,7 @@ class TrainingMonitor:
         """This function is called after all mini-batches of a gradient step are done. It aggregates the batch statistics. """
         if self.is_monitoring():
             for k, v in list(self.log_dict[self.step].items()): # we iterate over a copy to modify the original dict
-                if k.endswith(".l2norm") and type(v) == list:
+                if (k.endswith(".l2norm") or k.endswith(".l1norm")) and type(v) == list:
                     mean = np.mean(v)
                     std = np.std(v)  
                     self.log_dict[self.step][k] = mean
