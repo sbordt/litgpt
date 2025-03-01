@@ -212,6 +212,9 @@ class TrainingMonitor:
         return self.log_dict
 
 
+    #################################################################
+    # HDF5 saving and loading
+    #################################################################
     def condensed_log_dict(self):
         """Take the log_dict which has the form
         {
@@ -246,7 +249,6 @@ class TrainingMonitor:
             for parameter, value_dict in log_dict.items():
                 # Create a group for each parameter
                 group = f.create_group(parameter)
-                print(parameter)
 
                 # Save keys and values separately, converting to list first
                 # This avoids numpy array conversion issues
@@ -258,6 +260,59 @@ class TrainingMonitor:
 
                 group.create_dataset('keys', data=keys)
                 group.create_dataset('values', data=values)
+
+    
+    @classmethod
+    def read_hdf5_entry_keys(cls, filename):
+        """Read the names of the entries in a hdf5 file."""
+        import h5py
+
+        with h5py.File(filename, 'r') as f:
+            return list(f.keys())
+
+
+    @classmethod 
+    def read_hdf5_entry(cls, filename, entry_key):
+        """
+        Read a single entry from HDF5 file by its outer key.
+        
+        Args:
+            filename (str): Input HDF5 filename
+            entry_key (str): The outer key to load
+        
+        Returns:
+            dict: Single inner dictionary corresponding to entry_key
+            None: If entry_key doesn't exist
+        """
+        import h5py
+
+        with h5py.File(filename, 'r') as f:
+            # Convert key to string for HDF5 lookup
+            key_str = str(entry_key)
+            
+            # Check if key exists
+            if key_str not in f:
+                return None
+                
+            # Read just this group
+            inner_dict = {}
+            for key in f[key_str]:
+                value = f[key_str][key][()]
+                # Convert numpy types back to Python native types
+                if isinstance(value, np.generic):
+                    value = value.item()
+                inner_dict[key] = value
+                
+            return inner_dict['keys'], inner_dict['values']
+
+
+    @classmethod
+    def load_hdf5(cls, filename):
+        log_dict = {}
+        for entry_key in TrainingMonitor.read_hdf5_entry_keys(filename):
+            keys, values = TrainingMonitor.read_hdf5_entry(filename, entry_key)
+            log_dict[entry_key] = {k: v for (k, v) in zip(list(keys), list(values))}
+        return log_dict 
 
 
     #################################################################
@@ -379,9 +434,8 @@ class TrainingMonitor:
 
 
     #################################################################
-    # Monitor a scaled dot product attention operation
+    # Monitor the activations inside a scaled dot product attention operation
     # This function has to be called by the monitored module
-    # We currently monitor the activations
     #################################################################
     def monitor_scaled_dot_product_attention(self,
                                              module :Union[str, torch.nn.Module],  # the module that calls the attention function
@@ -501,7 +555,14 @@ class TrainingMonitor:
 
                 if self.verbose:
                     print("Info: Parameter ", name, " has shape ", param.shape, " with l2 norm ", norm, "(logged as ", log_entry, ")") 
-        
+
+
+    #################################################################
+    # Mointor the inner product betwenn a module input
+    # and the gradient update of the previous step
+    #################################################################
+    
+         
 
     #################################################################
     # Merge another log dict from a distributed traing run.

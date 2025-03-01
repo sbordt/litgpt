@@ -1,3 +1,10 @@
+"""Litgpt training with Maximal Update Parametrization (μP)
+
+   Inspired by https://github.com/EleutherAI/nanoGPT-mup/
+
+   Note that this module does not (yet) support all classes of models. 
+"""
+
 from lightning.fabric.strategies import FSDPStrategy
 from lightning.pytorch.cli import instantiate_class
 import lightning as L
@@ -16,9 +23,7 @@ import inspect
 
 @dataclass
 class MuPArgs:
-    """Arguments for training with Maximal Update Parametrization (μP)
-
-    Inspired by https://github.com/EleutherAI/nanoGPT-mup/
+    """Arguments for training with Maximal Update Parametrization (μP).
     """
 
     enabled: bool = False
@@ -47,7 +52,7 @@ def has_mup_enabled(config: Config) -> bool:
 
 
 def scale_width(config : Config, width : int):
-    """Scale the model width without necessarily applying muP."""
+    """Scale the model width."""
     if not width % config.n_embd == 0:
         raise ValueError("the provided width must be a multiple of the original width")
     if not width % config.head_size == 0:
@@ -180,8 +185,8 @@ def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
         {"params": mup_params, "lr_scale": 1/model.config.mup_args.width_multiplier},
         {"params": other_params, "lr_scale": 1}
     ]
-    print(f"MuP parameters: {sum(p.numel() for p in mup_params if p.requires_grad)}")
-    print(f"Other parameters: {sum(p.numel() for p in other_params if p.requires_grad)}")
+    # print(f"MuP parameters: {sum(p.numel() for p in mup_params if p.requires_grad)}")
+    # print(f"Other parameters: {sum(p.numel() for p in other_params if p.requires_grad)}")
 
     return instantiate_class(optim_groups, optimizer)
 
