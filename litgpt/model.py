@@ -334,10 +334,6 @@ class CausalSelfAttention(nn.Module, MonitoredModule):
 
         y = self.scaled_dot_product_attention(q, k, v, mask)
 
-        # monitor the attention operation
-        if self.is_monitoring:
-            self.get_training_monitor().monitor_scaled_dot_product_attention(self, q, k, v, y, mask, is_reference=self.is_reference_module)
-
         y = y.reshape(B, T, self.config.head_size * self.config.n_head)  # re-assemble all head outputs side by side
 
         # output projection
@@ -374,6 +370,11 @@ class CausalSelfAttention(nn.Module, MonitoredModule):
             y = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, attn_mask=mask, dropout_p=0.0, scale=scale, is_causal=mask is None
             )
+
+            # monitor the attention operation
+            if self.is_monitoring:
+                self.get_training_monitor().monitor_scaled_dot_product_attention(self, q, k, v, attn_mask=mask, dropout_p=0.0, scale=scale, is_causal=mask is None, output = y, is_reference=self.is_reference_module)
+
         return y.transpose(1, 2)
 
     def build_kv_cache(

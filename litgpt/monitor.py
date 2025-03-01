@@ -114,7 +114,7 @@ class TrainingMonitor:
         self.module = module
         for name, m in module.named_modules():
             self.module_names[m] = format_module_name(name)
-            self.module_hooks[m] = m.register_forward_hook(self.get_forwad_hook(self.module_names[m]))
+            self.module_hooks[m] = m.register_forward_hook(self._get_activation_forwad_hook(self.module_names[m]))
             if self.verbose:
                 print("Info: Registered forward hook for module ", name)
             # if the module implements the MonitoredModule interface, set the training monitor
@@ -132,7 +132,7 @@ class TrainingMonitor:
         self.reference_module = module
         for name, m in module.named_modules():
             self.reference_module_names[m] = format_module_name(name)
-            self.reference_module_hooks[m] = m.register_forward_hook(self.get_reference_forwad_hook())
+            self.reference_module_hooks[m] = m.register_forward_hook(self._get_reference_activation_forwad_hook())
 
             # if the module implements the MonitoredModule interface, set the training monitor
             if isinstance(m, MonitoredModule):
@@ -336,7 +336,13 @@ class TrainingMonitor:
                             module :Union[str, torch.nn.Module], 
                             activations :torch.Tensor,
                             is_reference :bool = False):
-        """Monitor the activations of a module."""
+        """Monitor the activations of a module.
+
+           This function is automatically called by the forward hooks that are registered on all modules of a monitored model.
+        
+           In addition, this function can be used to monitor activations that are not the output of a module.
+           This is what monitor_scaled_dot_product_attention does.
+        """
         if not self.is_monitoring():
             if self.verbose:
                 print("Warning: Attempted to monitor activations of module ", module, " but not monitoring the current step.")
@@ -396,13 +402,13 @@ class TrainingMonitor:
             print("Info: Monitored activations of module ", module_name, " with shape ", activations.shape)
 
 
-    def get_forwad_hook(self, module_name : str):
+    def _get_activation_forwad_hook(self, module_name : str):
         def hook(module, input, output):
             self.mointor_activations(module_name, output, is_reference=False)
         return hook
     
 
-    def get_reference_forwad_hook(self):
+    def _get_reference_activation_forwad_hook(self):
         def hook(module, input, output):
             self.mointor_activations(module, output, is_reference=True)
         return hook
@@ -442,13 +448,13 @@ class TrainingMonitor:
                                              query :torch.Tensor, 
                                              key :torch.Tensor, 
                                              value :torch.Tensor,
-                                             output :torch.Tensor = None, # the return value of torch.nn.functional.scaled_dot_product_attention (optional)
                                              attn_mask=None, 
                                              dropout_p=0.0,
                                              is_causal=False, 
                                              scale=None, 
                                              enable_gqa=False,
-                                             is_reference :bool = False):
+                                             activation :torch.Tensor = None, # the return value of torch.nn.functional.scaled_dot_product_attention (optional)
+                                             is_reference :bool = False): 
         """Monitor a scaled dot product attention operation. 
         Follows the signature of the pytorch function torch.nn.functional.scaled_dot_product_attention.
         """
@@ -458,12 +464,12 @@ class TrainingMonitor:
             print("Info: Monitoring scaled dot product attention for module ", module_name, " with query shape ", query.shape, " key shape ", key.shape, " value shape ", value.shape)
 
         # the monitoring here is VERY inefficient, as we have to recompute the attention weights
-        # first, we detach all tensors from the graph
+        # first, we detach all tensors from the computational graph
         query = query.detach()
         key = key.detach()
         value = value.detach()
-        if output is not None:
-            output = output.detach()
+        if activation is not None:
+            activation = activation.detach()
         if attn_mask is not None:
             attn_mask = attn_mask.detach()
 
@@ -494,14 +500,14 @@ class TrainingMonitor:
                 q = query[..., i_head, :, :]        # [B, S, D]
                 k = key[..., i_head, :, :]
                 v = value[..., i_head, :, :]
-                if output is not None:
-                    o = output[..., i_head, :, :]
+                if activation is not None:
+                    o = activation[..., i_head, :, :]
 
                 self.mointor_activations(f"{module_name}.head_{i_head}.query", q, is_reference=is_reference)
                 self.mointor_activations(f"{module_name}.head_{i_head}.key", k, is_reference=is_reference)
                 self.mointor_activations(f"{module_name}.head_{i_head}.value", v, is_reference=is_reference)
-                if output is not None:
-                    self.mointor_activations(f"{module_name}.head_{i_head}.output", o, is_reference=is_reference)
+                if activation is not None:
+                    self.mointor_activations(f"{module_name}.head_{i_head}.activation", o, is_reference=is_reference)
         else:
             if self.verbose:
                 print("Warning: monitor_scaled_dot_product_attention assumes that S == L and that the key query and value tensor have the same dimension.")
@@ -510,7 +516,7 @@ class TrainingMonitor:
         attn_weight += attn_bias
         attn_weight = torch.softmax(attn_weight, dim=-1)
         attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
-        # return attn_weight @ value [This is provided in output if the user wants us to monitor the output]
+        # return attn_weight @ value [This is provided in the activation argument]
 
 
     #################################################################
@@ -558,11 +564,36 @@ class TrainingMonitor:
 
 
     #################################################################
-    # Mointor the inner product betwenn a module input
-    # and the gradient update of the previous step
+    # Mointor the inner product betwenn the module input
+    # and a custom vector.
     #################################################################
-    
+    def monitor_activation_updates(self, comparison_model: torch.nn.Module):
+        """Mointor the change in activations due to a change in parameters.
+
+        During a forward pass of a new input through the model,
+        we pass the input of every module also into the corresponding module of the comparison model.
+        This means that we perform a forward operation in the comparison model
+        with the **intermediate** activations of the new model. 
+        
+        The advantage of this approach over the reference module is that the difference in activations does not 
+        accumulate from layer to layer. This is because every module in the comparison model
+        gets exactly the same input as the correpsonding module in the model.
+        Of course, the comparison model can be the reference model (but it can also be an independent copy
+        of the model from the previous gradient step).
+
+        The disadvantage of this approach is that I don't know how to make it work with FSDP.
+        So this only works on a single GPU.
          
+        This is likely the best way to perform a muP coordinate check during the first couple of gradient steps.
+        """
+        pass
+         
+
+    def _get_activation_update_forwad_hook(self, module_name : str):
+        def hook(module, input, output):
+            self.mointor_activations(module_name, output, is_reference=False)
+        return hook
+    
 
     #################################################################
     # Merge another log dict from a distributed traing run.
