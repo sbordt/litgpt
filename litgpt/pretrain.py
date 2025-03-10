@@ -497,6 +497,7 @@ def fit(
     if eval.final_validation:
         val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
         metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
+        training_monitor.monitor_scalars(metrics, force=True) 
         fabric.log_dict(metrics, step=state["iter_num"])
         fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
 

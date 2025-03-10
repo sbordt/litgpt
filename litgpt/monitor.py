@@ -371,10 +371,18 @@ class TrainingMonitor:
     #################################################################
     # Monitoring of scalar values
     #################################################################
-    def monitor_scalar(self, key, value):
-        """Monitor a scalar value such as the loss or the learning rate."""
-        if not self.is_monitoring():
+    def monitor_scalar(self, key: str, value, force=False):
+        """Monitor a scalar value such as the loss or the learning rate.
+        
+        If force is set to True, the value is logged even if we are not monitoring the current step.
+        This is useful to monitor values like the final validation loss.
+        """
+        if not self.is_monitoring() and not force:
             return
+        
+        if force: # if we are forcing the monitoring, then we might need to create a new entry in the log dict
+            if not self.step in self.log_dict:
+                self.log_dict[self.step] = {}
         
         if key in self.log_dict[self.step]:
             print("Warning: Monitoring ", key, " that has already been set in the current step.")
@@ -382,10 +390,10 @@ class TrainingMonitor:
         self.log_dict[self.step][key] = value
 
 
-    def monitor_scalars(self, monitor_dict: dict):
+    def monitor_scalars(self, monitor_dict: dict, force=False):
         """Monitor a dictionary of scalar values."""
         for key, value in monitor_dict.items():
-            self.monitor_scalar(key, value)
+            self.monitor_scalar(key, value, force=force)
 
 
     #################################################################
