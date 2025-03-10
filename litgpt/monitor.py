@@ -13,16 +13,59 @@ def format_module_name(name: str):
     return name
     
 
+#################################################################
+# Different Metrics that we can use to monitor activations,
+# parameters, and gradients.
+#
+# Activation tensors will be passed in full shape, while
+# parameters and gradients will be passed as flattened tensors.
+#
+# To work with both activation tensors and flattened tensors,
+# the metrics should be computed along the last
+# dimension of the tensor.
+#################################################################
+def l1_norm(tensor: torch.Tensor) -> torch.Tensor:
+    """Compute L1 norm along last dimension."""
+    return torch.linalg.vector_norm(tensor, ord=1, dim=-1)
+
+def l2_norm(tensor: torch.Tensor) -> torch.Tensor:
+    """Compute L2 norm along last dimension."""
+    return torch.linalg.vector_norm(tensor, ord=2, dim=-1)
+
+def mean(tensor: torch.Tensor) -> torch.Tensor:
+    """Compute mean along last dimension."""
+    return torch.mean(tensor, dim=-1)
+
+def std(tensor: torch.Tensor) -> torch.Tensor:
+    """Compute standard deviation along last dimension."""
+    return torch.std(tensor, dim=-1)
+
+def max_value(tensor: torch.Tensor) -> torch.Tensor:
+    """Compute maximum value along last dimension."""
+    return torch.max(tensor, dim=-1).values
+
+def min_value(tensor: torch.Tensor) -> torch.Tensor:
+    """Compute minimum value along last dimension."""
+    return torch.min(tensor, dim=-1).values
+
+def sparsity(tensor: torch.Tensor, threshold: float = 1e-6) -> torch.Tensor:
+    """Compute sparsity (fraction of near-zero values) along last dimension."""
+    zeros = (torch.abs(tensor) < threshold).float()
+    return torch.mean(zeros, dim=-1)
+
+
+#################################################################
+# Modules can subclass MonitoredModule to implement
+# custom monitoring behavior.
+#################################################################
 class MonitoredModule:
-    """A torch.nn.Module can subclass this class to monitor custom metrics during training.
+    """A torch.nn.Module can subclass this class to log custom metrics during the forward pass.
+    This is used to monitor the attention operation.
 
     During the foward pass, the module can obtain the training monitor via get_training_monitor(). 
 
     TrainingMonitor automatically calls set_training_monitor on all modules that subclass MonitoredModule.
     """
-    #################################################################
-    # Setup
-    #################################################################
     def __init__(self):
         self.training_monitor = None
         self.is_reference_module = False
@@ -39,6 +82,9 @@ class MonitoredModule:
         return self.training_monitor is not None and self.training_monitor.is_monitoring()
 
 
+#################################################################
+# The training mointor class
+#################################################################
 class TrainingMonitor:
     """Monitor the training of a pytorch modules.
 
@@ -67,7 +113,10 @@ class TrainingMonitor:
                  reference_module = None,
                  monitor_interval = 20,
                  step_start = 0,
-                 monitor = True): 
+                 monitor = True,
+                 activation_metrics=None,
+                 parameter_metrics=None,
+                 gradient_metrics=None): 
         """Init the training monitor."""
         self.module = None
         self.module_hooks = {}
@@ -85,6 +134,10 @@ class TrainingMonitor:
         self.monitor = monitor
         self.monitor_step = False # do we monitor the current gradient step?
         self.log_dict = {} # a dict to log the parameters, activations, etc. of all gradient steps. maps the step number to the log dict of that step.
+
+        self.activation_metrics = activation_metrics if activation_metrics is not None else {"l2norm": l2_norm}
+        self.parameter_metrics = parameter_metrics if parameter_metrics is not None else {"l2norm": l2_norm}
+        self.gradient_metrics = gradient_metrics if gradient_metrics is not None else {"l2norm": l2_norm}
 
         if module is not None:
             self.set_module(module)
@@ -316,17 +369,23 @@ class TrainingMonitor:
 
 
     #################################################################
-    # Basic monitoring functions
-    # These functions can also be called by the monitored module
-    # to log custom metrics.
+    # Monitoring of scalar values
     #################################################################
     def monitor_scalar(self, key, value):
-        """Log a scalar value."""
-        if self.monitor_step:
-            self.log_dict[self.step][key] = value
-        else:
-            if self.verbose:
-                print("Warning: logging a value while not monitoring the current step.")
+        """Monitor a scalar value such as the loss or the learning rate."""
+        if not self.is_monitoring():
+            return
+        
+        if key in self.log_dict[self.step]:
+            print("Warning: Monitoring ", key, " that has already been set in the current step.")
+
+        self.log_dict[self.step][key] = value
+
+
+    def monitor_scalars(self, monitor_dict: dict):
+        """Monitor a dictionary of scalar values."""
+        for key, value in monitor_dict.items():
+            self.monitor_scalar(key, value)
 
 
     #################################################################
@@ -351,6 +410,9 @@ class TrainingMonitor:
         # assert that module_name is a string
         module_name = self._module_name(module, is_reference)
 
+        # detach activations from the graph but keep on the device
+        activations = activations.detach()
+
         # if called with the activations of the reference module, store them in the reference_module_activations dict
         if is_reference:
             # raise a warning if no reference module is set
@@ -362,26 +424,25 @@ class TrainingMonitor:
                 print(f"Warning: Attempted to monitor activations of the reference module for module {module_name}, but activations are already stored.")
                 return
             # store the activations
-            self.reference_module_activations[module_name] = activations.detach() # detach from the graph but keep on the device
+            self.reference_module_activations[module_name] = activations 
             # we are done
             return
-        
-        # log the l1norm of the activations    
-        log_entry = f"{module_name}.activation.l1norm"
-        self.log_dict[self.step].setdefault(log_entry, [])
-        norm = torch.linalg.vector_norm(activations, ord=1, dim=-1, keepdim=False, out=None)  # output has shape [B, S]
-        norm = norm.detach().cpu()
-        norm = norm.flatten() # shape [B*S]
-        self.log_dict[self.step][log_entry].extend(norm.tolist())
-        
-        # log the l2norm of the activations    
-        # to support mini batches, we first keep all the norms in a list and average after the entire batch is done
-        log_entry = f"{module_name}.activation.l2norm"
-        self.log_dict[self.step].setdefault(log_entry, [])
-        norm = torch.linalg.vector_norm(activations, ord=2, dim=-1, keepdim=False, out=None)  # output has shape [B, S]
-        norm = norm.detach().cpu()
-        norm = norm.flatten() # shape [B*S]
-        self.log_dict[self.step][log_entry].extend(norm.tolist())
+
+        # Compute and log each metric
+        for metric_name, metric_fn in self.activation_metrics.items():
+            # Compute the metric
+            result = metric_fn(activations)
+            
+            # Create log entry
+            log_entry = f"{module_name}.activation.{metric_name}"
+            self.log_dict[self.step].setdefault(log_entry, [])
+            
+            # Detach, move to CPU, and flatten
+            result_cpu = result.detach().cpu().flatten()
+            self.log_dict[self.step][log_entry].extend(result_cpu.tolist())
+            
+            if self.verbose:
+                print(f"Info: Monitored {metric_name} of activations for module {module_name}")
 
         # if there is a reference module, log the difference in l2 norm between the activations of the monitored module and the reference module
         if self.has_reference_module():
@@ -422,8 +483,11 @@ class TrainingMonitor:
     def after_forward(self):
         """This function is called after all mini-batches of a gradient step are done. It aggregates the batch statistics. """
         if self.is_monitoring():
+            # aggregate metrics
+            suffixes = list(self.activation_metrics.keys())
+
             for k, v in list(self.log_dict[self.step].items()): # we iterate over a copy to modify the original dict
-                if (k.endswith(".l2norm") or k.endswith(".l1norm")) and type(v) == list:
+                if type(v) == list and any(k.endswith(f".{suffix}") for suffix in suffixes):
                     mean = np.mean(v)
                     std = np.std(v)  
                     self.log_dict[self.step][k] = mean
@@ -523,44 +587,67 @@ class TrainingMonitor:
     # Logging of gradients
     #################################################################
     def monitor_gradients(self, before_clip=False):
-        if self.is_monitoring():
-            for name, param in self.module.named_parameters():
-                # check if param has a gradient
-                if param.grad is not None:
-                    # the l2 norm of the gradient
-                    log_entry = f"{format_module_name(name)}.gradient.l2norm"
-                    if before_clip:
-                        log_entry += ".before_clip"
-                    norm = param.grad.norm(p='fro').item()
-                    self.monitor_scalar(log_entry, norm)
-                    if self.verbose:
-                        print("Info: Parameter ", name, " has gradient of shape ", param.grad.shape, " with l2 norm ", norm, "(logged as ", log_entry, ")")
-                else:
-                    if self.verbose:
-                        print("Warning: Parameter without gradient:", name)
-    
+        if not self.is_monitoring():
+            return
+        
+        for name, param in self.module.named_parameters():
+            if param.grad is None:
+                if self.verbose:
+                    print("Warning: Found a parameter where the gradient is None:", name)
+                continue
+
+            # log the different metrics (most likely the frobenius norm of the gradients)
+            for metric_name, metric_fn in self.gradient_metrics.items():
+                # we apply the metrics to the flattened gradient tensor
+                result = metric_fn(param.grad.detach().flatten())
+
+                # if result is a tensor, apply item()
+                if isinstance(result, torch.Tensor):
+                    result = result.item()
+
+                # Create log entry
+                log_entry = f"{format_module_name(name)}.gradient.{metric_name}"
+                if before_clip:
+                    log_entry += ".before_clip"
+
+                self.monitor_scalar(log_entry, result)
+
+                if self.verbose:
+                    print("Info: Parameter ", name, " has gradient of shape ", param.grad.shape, " with ", metric_name, " ", result, "(logged as ", log_entry, ")")
+
 
     #################################################################
     # Logging of parameters
     #################################################################
     def monitor_parameters(self):
-        if self.is_monitoring():
-            for name, param in self.module.named_parameters():
-                # the l2 norm of the parameter
-                log_entry = f"{format_module_name(name)}.l2norm"
-                norm = param.norm(p='fro').item()
-                self.monitor_scalar(log_entry, norm)
+        if not self.is_monitoring():
+            return
+        
+        for name, param in self.module.named_parameters():
 
-                # the difference in l2 norm to the reference module
-                if self.reference_module is not None:
-                    key = format_module_name(name)
-                    ref_param = self.reference_module_parameters[key]
-                    log_entry = f"{format_module_name(name)}.diff.l2norm"
-                    diff = (param - ref_param).norm(p='fro').item()
-                    self.monitor_scalar(log_entry, diff)
+            # log the different metrics (most likely the frobenius norm of the parameters)
+            for metric_name, metric_fn in self.parameter_metrics.items():
+                # we apply the metrics to the flattened parameter tensor
+                result = metric_fn(param.flatten())
+
+                # if result is a tensor, apply item()
+                if isinstance(result, torch.Tensor):
+                    result = result.item()
+
+                # Create log entry
+                log_entry = f"{format_module_name(name)}.{metric_name}"
+                self.monitor_scalar(log_entry, result)
 
                 if self.verbose:
-                    print("Info: Parameter ", name, " has shape ", param.shape, " with l2 norm ", norm, "(logged as ", log_entry, ")") 
+                    print("Info: Parameter ", name, " has shape ", param.shape, " with ", metric_name, " ", result, "(logged as ", log_entry, ")")
+                    
+            # the difference in l2 norm to the reference module
+            if self.reference_module is not None:
+                key = format_module_name(name)
+                ref_param = self.reference_module_parameters[key]
+                log_entry = f"{format_module_name(name)}.diff.l2norm"
+                diff = (param - ref_param).norm(p='fro').item()
+                self.monitor_scalar(log_entry, diff)
 
 
     #################################################################
@@ -635,7 +722,6 @@ class TrainingMonitor:
                     new_log_dict[step][key] = std
 
         self.log_dict = new_log_dict # successfull merge
-
 
 
     #################################################################

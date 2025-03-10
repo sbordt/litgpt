@@ -221,7 +221,7 @@ def main(
     reference_model.load_state_dict(model.state_dict()) # the reference model is the model with the weights at time step zero
 
     if train.tie_embeddings:
-        model.transformer.wte.weight = model.lm_head.weight
+        model.transformer.wte.weight = model.lm_head.weight # TODO need this for reference model, too
     if train.max_seq_length:
         model.max_seq_length = train.max_seq_length
 
@@ -415,7 +415,9 @@ def fit(
                 training_monitor.monitor_parameters()
                 training_monitor.monitor_gradients(before_clip=True)
             
-            fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
+            grad_norm = fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
+            if grad_norm is not None:
+                training_monitor.monitor_scalars({"grad_norm": grad_norm})
 
             if fabric.world_size > 1: # same as above
                 if training_monitor.is_monitoring(): # gather only if we are monitoring
@@ -466,8 +468,10 @@ def fit(
 
             throughput_metrics = throughput.compute()
             metrics.update(throughput_metrics)
+            training_monitor.monitor_scalars(metrics) 
             metrics.update(training_monitor.get_step_metrics())
             fabric.log_dict(metrics, step=state["step_count"])
+            
 
         if val_dataloader is not None and not is_accumulating and state["step_count"] % eval.interval == 0:
             t0 = time.perf_counter()
