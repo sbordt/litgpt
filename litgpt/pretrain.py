@@ -79,6 +79,7 @@ def setup(
     seed: int = 42,
     training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training  
     initialize_weights_fn: Optional[callable] = None,
+    get_lr_fn: Optional[callable] = None,
 ):
     """Pretrain a model.
 
@@ -106,9 +107,6 @@ def setup(
         logger_name: The name of the logger to send metrics to.
         seed: The random seed to use for reproducibility.
     """
-    if initialize_weights_fn is None:
-        initialize_weights_fn = initialize_weights
-
     if model_name == "list":
         available_models = "\n".join(sorted(name_to_config))
         print(f"Available values:\n{available_models}")
@@ -182,6 +180,7 @@ def setup(
         optimizer,
         training_monitor,
         initialize_weights_fn,
+        get_lr_fn,
     )
 
 
@@ -201,6 +200,7 @@ def main(
     optimizer: Union[str, Dict],
     training_monitor :TrainingMonitor = None,
     initialize_weights_fn: Optional[callable] = None,
+    get_lr_fn: Optional[callable] = None,
 ) -> None:
     if initialize_weights_fn is None:
         initialize_weights_fn = initialize_weights
@@ -280,7 +280,18 @@ def main(
         fabric.load(resume, state)
 
     train_time = time.perf_counter()
-    fit(fabric, devices, state, train_dataloader, val_dataloader, out_dir, tokenizer_dir, train, eval, training_monitor, reference_model)
+    fit(fabric,
+        devices, 
+        state, 
+        train_dataloader, 
+        val_dataloader, 
+        out_dir, 
+        tokenizer_dir, 
+        train, 
+        eval,
+        training_monitor, 
+        reference_model,
+        get_lr_fn)
 
     # Save final checkpoint
     save_checkpoint(fabric, state, tokenizer_dir, out_dir / "final" / "lit_model.pth")
@@ -314,7 +325,11 @@ def fit(
     eval: EvalArgs,
     training_monitor :TrainingMonitor = None,
     reference_model: Optional[nn.Module] = None,
+    get_lr_fn: Optional[callable] = None,
 ) -> None:
+    if get_lr_fn is None:
+        get_lr_fn = get_lr
+
     model = state["model"]
     optimizer = state["optimizer"]
 
@@ -364,7 +379,7 @@ def fit(
             break
 
         # determine and set the learning rate for this iteration
-        lr = get_lr(optimizer.defaults["lr"], state["iter_num"], warmup_iters, max_iters, train.min_lr)
+        lr = get_lr_fn(optimizer.defaults["lr"], state["iter_num"], warmup_iters, max_iters, train.min_lr, state["step_count"]+1)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
             ### Begin muP code ###
@@ -538,7 +553,7 @@ def get_dataloaders(
 
 
 # learning rate decay scheduler (cosine with linear warmup)
-def get_lr(learning_rate: float, it: int, warmup_iters: int, max_iters: int, min_lr: float) -> float:
+def get_lr(learning_rate: float, it: int, warmup_iters: int, max_iters: int, min_lr: float, step: int) -> float:
     # 1) linear warmup for warmup_iters steps
     if it < warmup_iters:
         return learning_rate * it / warmup_iters

@@ -399,7 +399,7 @@ class TrainingMonitor:
     #################################################################
     # Activations are logged with forward hooks
     #################################################################
-    def mointor_activations(self, 
+    def monitor_activations(self, 
                             module :Union[str, torch.nn.Module], 
                             activations :torch.Tensor,
                             is_reference :bool = False):
@@ -445,9 +445,9 @@ class TrainingMonitor:
             log_entry = f"{module_name}.activation.{metric_name}"
             self.log_dict[self.step].setdefault(log_entry, [])
             
-            # Detach, move to CPU, and flatten
-            result_cpu = result.detach().cpu().flatten()
-            self.log_dict[self.step][log_entry].extend(result_cpu.tolist())
+            # Flatten
+            result = result.flatten()
+            self.log_dict[self.step][log_entry].append(result)
             
             if self.verbose:
                 print(f"Info: Monitored {metric_name} of activations for module {module_name}")
@@ -460,9 +460,8 @@ class TrainingMonitor:
                     self.log_dict[self.step][log_entry] = []
                 ref_activation = self.reference_module_activations[module_name]
                 diff_norm = torch.linalg.vector_norm(activations - ref_activation, ord=2, dim=-1, keepdim=False, out=None)
-                diff_norm = diff_norm.detach().cpu()
-                diff_norm = diff_norm.flatten()
-                self.log_dict[self.step][log_entry].extend(diff_norm.tolist())
+                diff_norm = diff_norm.detach()
+                self.log_dict[self.step][log_entry].append(diff_norm)
             else:
                 if self.verbose:
                     print("Warning: No reference module activations found for module ", module_name)
@@ -473,13 +472,13 @@ class TrainingMonitor:
 
     def _get_activation_forwad_hook(self, module_name : str):
         def hook(module, input, output):
-            self.mointor_activations(module_name, output, is_reference=False)
+            self.monitor_activations(module_name, output, is_reference=False)
         return hook
     
 
     def _get_reference_activation_forwad_hook(self):
         def hook(module, input, output):
-            self.mointor_activations(module, output, is_reference=True)
+            self.monitor_activations(module, output, is_reference=True)
         return hook
     
 
@@ -496,10 +495,9 @@ class TrainingMonitor:
 
             for k, v in list(self.log_dict[self.step].items()): # we iterate over a copy to modify the original dict
                 if type(v) == list and any(k.endswith(f".{suffix}") for suffix in suffixes):
-                    mean = np.mean(v)
-                    std = np.std(v)  
-                    self.log_dict[self.step][k] = mean
-                    self.log_dict[self.step][k + ".std"] = std
+                    v = torch.cat(v)
+                    self.log_dict[self.step][k] = torch.mean(v).item()
+                    self.log_dict[self.step][k + ".std"] = torch.std(v).item()
 
             # print total number of keys
             if self.verbose:
@@ -575,11 +573,11 @@ class TrainingMonitor:
                 if activation is not None:
                     o = activation[..., i_head, :, :]
 
-                self.mointor_activations(f"{module_name}.head_{i_head}.query", q, is_reference=is_reference)
-                self.mointor_activations(f"{module_name}.head_{i_head}.key", k, is_reference=is_reference)
-                self.mointor_activations(f"{module_name}.head_{i_head}.value", v, is_reference=is_reference)
+                self.monitor_activations(f"{module_name}.head_{i_head}.query", q, is_reference=is_reference)
+                self.monitor_activations(f"{module_name}.head_{i_head}.key", k, is_reference=is_reference)
+                self.monitor_activations(f"{module_name}.head_{i_head}.value", v, is_reference=is_reference)
                 if activation is not None:
-                    self.mointor_activations(f"{module_name}.head_{i_head}.activation", o, is_reference=is_reference)
+                    self.monitor_activations(f"{module_name}.head_{i_head}.activation", o, is_reference=is_reference)
         else:
             if self.verbose:
                 print("Warning: monitor_scaled_dot_product_attention assumes that S == L and that the key query and value tensor have the same dimension.")
@@ -686,7 +684,7 @@ class TrainingMonitor:
 
     def _get_activation_update_forwad_hook(self, module_name : str):
         def hook(module, input, output):
-            self.mointor_activations(module_name, output, is_reference=False)
+            self.monitor_activations(module_name, output, is_reference=False)
         return hook
     
 
