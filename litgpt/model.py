@@ -373,7 +373,7 @@ class CausalSelfAttention(nn.Module, MonitoredModule):
 
             # monitor the attention operation
             if self.is_monitoring:
-                self.get_training_monitor().monitor_scaled_dot_product_attention(self, q, k, v, attn_mask=mask, dropout_p=0.0, scale=scale, is_causal=mask is None, output = y, is_reference=self.is_reference_module)
+                self.get_training_monitor().monitor_scaled_dot_product_attention(self, q, k, v, attn_mask=mask, dropout_p=0.0, scale=scale, is_causal=mask is None, activation = y, is_reference=self.is_reference_module)
 
         return y.transpose(1, 2)
 
