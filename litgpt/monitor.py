@@ -369,25 +369,55 @@ class TrainingMonitor:
 
 
     #################################################################
-    # Monitoring of scalar values
+    # Basic logging functions
     #################################################################
-    def monitor_scalar(self, key: str, value, force=False):
+    def monitor_scalar(self, key: str, value: Union[int,float], force=False):
         """Monitor a scalar value such as the loss or the learning rate.
         
         If force is set to True, the value is logged even if we are not monitoring the current step.
         This is useful to monitor values like the final validation loss.
+
+        A scalar value is first logged internally as an individual value to the given key.
+        If the same key is logged again, loggend values are stored in a list and subsquently aggregated by after_forward.
         """
         if not self.is_monitoring() and not force:
             return
         
-        if force: # if we are forcing the monitoring, then we might need to create a new entry in the log dict
-            if not self.step in self.log_dict:
-                self.log_dict[self.step] = {}
+        if force and self.step not in self.log_dict:
+            self.log_dict[self.step] = {}
         
-        if key in self.log_dict[self.step]:
-            print("Warning: Monitoring ", key, " that has already been set in the current step.")
+        if key in self.log_dict[self.step]: # log different values of the same key in a list
+            if not isinstance(self.log_dict[self.step][key], list):
+                self.log_dict[self.step][key] = [self.log_dict[self.step][key]]
+            self.log_dict[self.step][key].append(value)
+        else:
+            self.log_dict[self.step][key] = value
 
-        self.log_dict[self.step][key] = value
+
+    def monitor_tensor(self, key: str, tensor: torch.Tensor, force=False):
+        """Monitor a torch.Tensor.
+
+        Tensors are stored in a list and aggregated by after_forward.
+        
+        Args:
+            key (str): The key under which to log the tensor metrics.
+            tensor (torch.Tensor): The tensor to monitor.
+            force (bool): Whether to log even if not monitoring the current step.
+        """
+        if not self.is_monitoring() and not force:
+            return
+        
+        if force and self.step not in self.log_dict:
+            self.log_dict[self.step] = {}
+
+        # detach and flatten the tensor
+        tensor = tensor.detach().flatten()
+
+        # tensors are stored in a list before aggregation
+        if key in self.log_dict[self.step]:
+            self.log_dict[self.step][key].append(tensor)
+        else:
+            self.log_dict[self.step][key] = [tensor]
 
 
     def monitor_scalars(self, monitor_dict: dict, force=False):
@@ -436,32 +466,22 @@ class TrainingMonitor:
             # we are done
             return
 
-        # Compute and log each metric
+        # monitor the different activation metrics
         for metric_name, metric_fn in self.activation_metrics.items():
-            # Compute the metric
+            # compute the metric
             result = metric_fn(activations)
-            
-            # Create log entry
+
+            # monitor the metric
             log_entry = f"{module_name}.activation.{metric_name}"
-            self.log_dict[self.step].setdefault(log_entry, [])
-            
-            # Flatten
-            result = result.flatten()
-            self.log_dict[self.step][log_entry].append(result)
-            
-            if self.verbose:
-                print(f"Info: Monitored {metric_name} of activations for module {module_name}")
+            self.monitor_tensor(log_entry, result)
 
         # if there is a reference module, log the difference in l2 norm between the activations of the monitored module and the reference module
         if self.has_reference_module():
             if module_name in self.reference_module_activations:
-                log_entry = f"{module_name}.activation.diff.l2norm"
-                if not log_entry in self.log_dict[self.step]:
-                    self.log_dict[self.step][log_entry] = []
                 ref_activation = self.reference_module_activations[module_name]
                 diff_norm = torch.linalg.vector_norm(activations - ref_activation, ord=2, dim=-1, keepdim=False, out=None)
-                diff_norm = diff_norm.detach()
-                self.log_dict[self.step][log_entry].append(diff_norm)
+                log_entry = f"{module_name}.activation.diff.l2norm"
+                self.monitor_tensor(log_entry, diff_norm)
             else:
                 if self.verbose:
                     print("Warning: No reference module activations found for module ", module_name)
@@ -491,13 +511,17 @@ class TrainingMonitor:
         """This function is called after all mini-batches of a gradient step are done. It aggregates the batch statistics. """
         if self.is_monitoring():
             # aggregate metrics
-            suffixes = list(self.activation_metrics.keys())
+            #suffixes = list(self.activation_metrics.keys())
 
-            for k, v in list(self.log_dict[self.step].items()): # we iterate over a copy to modify the original dict
-                if type(v) == list and any(k.endswith(f".{suffix}") for suffix in suffixes):
-                    v = torch.cat(v)
-                    self.log_dict[self.step][k] = torch.mean(v).item()
-                    self.log_dict[self.step][k + ".std"] = torch.std(v).item()
+            for k, v in list(self.log_dict[self.step].items()): # iterate over a copy because we modify the original dict
+                if type(v) == list: #  and any(k.endswith(f".{suffix}") for suffix in suffixes)
+                    if isinstance(v[0], torch.Tensor): # list of tensors (activations)
+                        v = torch.cat(v)
+                        self.log_dict[self.step][k] = torch.mean(v).item()
+                        self.log_dict[self.step][k + ".std"] = torch.std(v).item()
+                    else: # list of scalars
+                        self.log_dict[self.step][k] = np.mean(v)
+                        self.log_dict[self.step][k + ".std"] = np.std(v)
 
             # print total number of keys
             if self.verbose:
@@ -586,6 +610,17 @@ class TrainingMonitor:
         attn_weight += attn_bias
         attn_weight = torch.softmax(attn_weight, dim=-1)
         attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+
+        # monitor entropy of the attention weights
+        if S == L and query.size(-3) == key.size(-3) and query.size(-1) == value.size(-1):
+            n_head = query.size(-3)
+            for i_head in range(n_head):
+                w = attn_weight[..., i_head, :, :]
+                entropy = -torch.sum(w * torch.log(w + 1e-8), dim=-1)
+                self.monitor_tensor(f"{module_name}.head_{i_head}.attention_entropy", entropy)
+
+                if self.verbose:
+                    print("Info: Monitored attention entropy for head ", module_name, " with shape ", entropy.shape)
         # return attn_weight @ value [This is provided in the activation argument]
 
 
