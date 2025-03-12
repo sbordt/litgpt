@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import math
 from typing import Union, List
+from numbers import Number
 
 
 def format_module_name(name: str):
@@ -116,14 +117,17 @@ class TrainingMonitor:
                  monitor = True,
                  activation_metrics=None,
                  parameter_metrics=None,
-                 gradient_metrics=None): 
+                 gradient_metrics=None,
+                 activation_difference_metrics=None): 
         """Init the training monitor."""
         self.module = None
         self.module_hooks = {}
-        self.module_names = {}      # a mapping from modules to their names
+        self.activation_difference_hooks = {}   # used by monitor_activation_differences
+        self.module_names = {}                  # a mapping from modules to their names
 
         self.reference_module = None
         self.reference_module_hooks = {}
+        self.ignore_reference_module_activations = False
         self.reference_module_names = {}        # a mapping from modules to their names
         self.reference_module_parameters = {}   # a mapping from parameter names to the parameters
         self.reference_module_activations = {}  # a mapping from module names to their activations
@@ -138,6 +142,7 @@ class TrainingMonitor:
         self.activation_metrics = activation_metrics if activation_metrics is not None else {"l2norm": l2_norm}
         self.parameter_metrics = parameter_metrics if parameter_metrics is not None else {"l2norm": l2_norm}
         self.gradient_metrics = gradient_metrics if gradient_metrics is not None else {"l2norm": l2_norm}
+        self.activation_difference_metrics = activation_difference_metrics if activation_difference_metrics is not None else {"l2norm": lambda x, y: l2_norm(x - y)}
 
         if module is not None:
             self.set_module(module)
@@ -154,9 +159,12 @@ class TrainingMonitor:
         # remove any previous module
         if self.module is not None:
             self.module = None
-            for hook in self.module_hooks.values():
+            for hook in self.module_hooks.values(): # remove all hooks
                 hook.remove()
             self.module_hooks = {}
+            for hook in self.activation_difference_hooks.values():
+                hook.remove()
+            self.activation_difference_hooks = {}
             self.module_names = {}
             # if the module implements the MonitoredModule interface, remove the training monitor
             for _, m in module.named_modules():
@@ -228,6 +236,10 @@ class TrainingMonitor:
     #################################################################
     def set_step(self, step):
         """Notify the monitor that a new step has started. This function should be called before the forward pass. Returns True if the step should be monitored, False otherwise."""
+        # check that there is a module to monitor
+        if self.module is None:
+            raise ValueError("No module to monitor. Please set the module first.")
+        
         # clean-up the previous step
         self.reference_module_activations = {}
 
@@ -371,7 +383,7 @@ class TrainingMonitor:
     #################################################################
     # Basic logging functions
     #################################################################
-    def monitor_scalar(self, key: str, value: Union[int,float], force=False):
+    def monitor_scalar(self, key: str, value, force=False):
         """Monitor a scalar value such as the loss or the learning rate.
         
         If force is set to True, the value is logged even if we are not monitoring the current step.
@@ -385,6 +397,14 @@ class TrainingMonitor:
         
         if force and self.step not in self.log_dict:
             self.log_dict[self.step] = {}
+
+        # if value is a tensor, it has to be a scalar value so we call item()
+        if isinstance(value, torch.Tensor):
+            value = value.item()
+
+        # verify that value is a number
+        if not isinstance(value, Number):
+            raise ValueError("Value must be a number.")
         
         if key in self.log_dict[self.step]: # log different values of the same key in a list
             if not isinstance(self.log_dict[self.step][key], list):
@@ -441,8 +461,6 @@ class TrainingMonitor:
            This is what monitor_scaled_dot_product_attention does.
         """
         if not self.is_monitoring():
-            if self.verbose:
-                print("Warning: Attempted to monitor activations of module ", module, " but not monitoring the current step.")
             return
 
         # assert that module_name is a string
@@ -453,6 +471,9 @@ class TrainingMonitor:
 
         # if called with the activations of the reference module, store them in the reference_module_activations dict
         if is_reference:
+            if self.ignore_reference_module_activations:
+                return
+
             # raise a warning if no reference module is set
             if not self.has_reference_module():
                 print(f"Warning: Attempted to monitor activations of the reference module, but no reference module is set (for module {module_name}).")
@@ -475,13 +496,17 @@ class TrainingMonitor:
             log_entry = f"{module_name}.activation.{metric_name}"
             self.monitor_tensor(log_entry, result)
 
-        # if there is a reference module, log the difference in l2 norm between the activations of the monitored module and the reference module
+        # metrics based on the activations and the reference activations (most likely L2 norm)
         if self.has_reference_module():
             if module_name in self.reference_module_activations:
-                ref_activation = self.reference_module_activations[module_name]
-                diff_norm = torch.linalg.vector_norm(activations - ref_activation, ord=2, dim=-1, keepdim=False, out=None)
-                log_entry = f"{module_name}.activation.diff.l2norm"
-                self.monitor_tensor(log_entry, diff_norm)
+                ref_activations = self.reference_module_activations[module_name]
+
+                for metric_name, metric_fn in self.activation_difference_metrics.items():
+                    # compute the metric
+                    result = metric_fn(activations, ref_activations)
+
+                    log_entry = f"{module_name}.activation.diff.{metric_name}"
+                    self.monitor_tensor(log_entry, result)
             else:
                 if self.verbose:
                     print("Warning: No reference module activations found for module ", module_name)
@@ -531,6 +556,71 @@ class TrainingMonitor:
                 import sys
                 size = sys.getsizeof(self.log_dict) / 1024 / 1024
                 print("Training Monitor: Size of log_dict in MB:", size)
+
+
+    #######################################################################################
+    # Monitoring of activation differences with  requires additional forward passes.
+    #######################################################################################
+    def monitor_activation_differences(self, comparison_model: torch.nn.Module):
+        """Mointor the difference in activations between the monitored module and a comparison module. This can be used to perform a muP coordinate check.
+
+        When this function is called by the user, the training monitor performs additional computations to compare the intermediate activations of the monitored module and the comparison module.
+
+        During a forward pass of the monitored module, we pass the input of every module also into the corresponding module of the comparison model and monitor the difference of the outputs.
+        This means that we perform a forward operation in the comparison model with the **intermediate** input activations of the monitored module.
+        The comparison module must have the same architecture as the monitored module. It can, but does not have to be the reference module.
+
+        The comparison model must be set before the forward pass of the monitored module.
+        
+        Note: This function only works if the monitored module and the comparison module are on the same (single) device. This does NOT work with FSDP.
+        """
+        if self.module is None:
+            raise ValueError("No module to monitor. Please set the module first.")
+
+        # validate that we can find all modules in the comparison model
+        modules = dict(self.module.named_modules())
+        comparison_modules = dict(comparison_model.named_modules())
+
+        for name in modules.keys(): 
+            if not name in comparison_modules:
+                raise ValueError(f"Module {name} not found in the comparison model.")
+            
+        # remove any previous activation_difference_hooks
+        for hook in self.activation_difference_hooks.values():
+            hook.remove()
+        self.activation_difference_hooks = {}
+            
+        # register hooks to perform the additional forward passes
+        for name in modules.keys():
+            mod = modules[name]
+            comp_mod = comparison_modules[name]
+            self.activation_difference_hooks[mod] = mod.register_forward_hook(self._get_activation_differences_forwad_hook(self.module_names[mod], comp_mod))
+         
+
+    def _get_activation_differences_forwad_hook(self, module_name : str, comp_mod: torch.nn.Module):
+        def hook(module, input, output):
+            if not self.is_monitoring():
+                return
+
+            # every part of the input that is a tensor needs to be detached from the computational graph
+            input = (i.detach() if isinstance(i, torch.Tensor) else i for i in input)
+
+            # perform an additional forward pass in the comparison module
+            with torch.no_grad():
+                self.ignore_reference_module_activations = True      # temporarily ignore reference module activation hooks (relevant if the comparison module is the reference module)
+                comp_output = comp_mod(*input)
+                self.ignore_reference_module_activations = False
+
+            # compute difference metrics
+            for metric_name, metric_fn in self.activation_difference_metrics.items():
+                # compute the metric
+                result = metric_fn(output, comp_output.detach())
+
+                # monitor the metric
+                log_entry = f"{module_name}.activation.intermediate_diff.{metric_name}"
+                self.monitor_tensor(log_entry, result)
+
+        return hook
 
 
     #################################################################
@@ -689,38 +779,6 @@ class TrainingMonitor:
                 log_entry = f"{format_module_name(name)}.diff.l2norm"
                 diff = (param - ref_param).norm(p='fro').item()
                 self.monitor_scalar(log_entry, diff)
-
-
-    #################################################################
-    # Mointor the inner product betwenn the module input
-    # and a custom vector.
-    #################################################################
-    def monitor_activation_updates(self, comparison_model: torch.nn.Module):
-        """Mointor the change in activations due to a change in parameters.
-
-        During a forward pass of a new input through the model,
-        we pass the input of every module also into the corresponding module of the comparison model.
-        This means that we perform a forward operation in the comparison model
-        with the **intermediate** activations of the new model. 
-        
-        The advantage of this approach over the reference module is that the difference in activations does not 
-        accumulate from layer to layer. This is because every module in the comparison model
-        gets exactly the same input as the correpsonding module in the model.
-        Of course, the comparison model can be the reference model (but it can also be an independent copy
-        of the model from the previous gradient step).
-
-        The disadvantage of this approach is that I don't know how to make it work with FSDP.
-        So this only works on a single GPU.
-         
-        This is likely the best way to perform a muP coordinate check during the first couple of gradient steps.
-        """
-        pass
-         
-
-    def _get_activation_update_forwad_hook(self, module_name : str):
-        def hook(module, input, output):
-            self.monitor_activations(module_name, output, is_reference=False)
-        return hook
     
 
     #################################################################
