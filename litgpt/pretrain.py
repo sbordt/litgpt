@@ -411,21 +411,9 @@ def fit(
                     _ = reference_model(input_ids)
 
             # (micro-) batch for the model
-            with torch.profiler.profile(
-                activities=[
-                    torch.profiler.ProfilerActivity.CPU,
-                    torch.profiler.ProfilerActivity.CUDA],
-                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                record_shapes=True,
-                profile_memory=True,
-                with_stack=True
-            ) as prof:
-                logits = model(input_ids)
+            logits = model(input_ids)
             loss = chunked_cross_entropy(logits, targets)
             fabric.backward(loss / train.gradient_accumulation_iters(devices))
-
-            print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-            prof.export_chrome_trace(f"/weka/luxburg/sbordt10/logs/traces/litgpt-pretrain-trace_{state['iter_num']}.json")
 
         running_loss.update(loss.detach())
         training_monitor.clear_reference_activations()
