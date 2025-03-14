@@ -368,12 +368,12 @@ def fit(
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
     # monitor the training
-    training_monitor.set_module(model)
-    training_monitor.set_reference_module(reference_model)
+    # training_monitor.set_module(model)
+    # training_monitor.set_reference_module(reference_model)
 
     # if we are training on a single gpu, monitor intermediate activation differences
-    if fabric.world_size == 1:
-        training_monitor.monitor_activation_differences(reference_model)
+    #if fabric.world_size == 1:
+    #    training_monitor.monitor_activation_differences(reference_model)
 
     # mointoring of the first step
     training_monitor.set_step(state["step_count"]+1)
