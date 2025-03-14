@@ -236,12 +236,16 @@ class TrainingMonitor:
     #################################################################
     def set_step(self, step):
         """Notify the monitor that a new step has started. This function should be called before the forward pass. Returns True if the step should be monitored, False otherwise."""
+        # clean-up any previous step (if not done already)
+        self.reference_module_activations = {}
+        
+        self.monitor_step = False
+        if not self.monitor: # do not monitor
+            return False
+        
         # check that there is a module to monitor
         if self.module is None:
             raise ValueError("No module to monitor. Please set the module first.")
-        
-        # clean-up the previous step
-        self.reference_module_activations = {}
 
         # do we monitor this step?
         self.step = step
@@ -250,9 +254,6 @@ class TrainingMonitor:
             self.monitor_step = True
         if not self.monitor_step and step <= 100: # more frequent monitoring for the first 100 steps
             self.monitor_step = step % 20 == 1
-
-        if not self.monitor: # global toggle to turn monitoring off
-            self.monitor_step = False
 
         # if we monitor this step, create a new entry in the log dict
         if self.monitor_step: 
