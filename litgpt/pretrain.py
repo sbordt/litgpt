@@ -425,7 +425,7 @@ def fit(
             fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
             print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-            prof.export_chrome_trace(f"/weka/luxburg/sbordt10/logs/traces/litgpt-pretrain-trace_{state["iter_num"]}.json")
+            prof.export_chrome_trace(f"/weka/luxburg/sbordt10/logs/traces/litgpt-pretrain-trace_{state['iter_num']}.json")
 
         running_loss.update(loss.detach())
         training_monitor.clear_reference_activations()
