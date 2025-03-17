@@ -241,10 +241,10 @@ def main(
     fabric.print(f"Total parameters: {num_parameters(model):,}")
 
     # turn off compilation because it leads to warnings with the hooks that I would like to understand better (?)
-    model = torch.compile(model)
+    # model = torch.compile(model)
     model = fabric.setup(model)
 
-    reference_model = torch.compile(reference_model)
+    # reference_model = torch.compile(reference_model)
     reference_model = fabric.setup(reference_model)
 
     # lightning performs re-initialization of model weights with FSDP.
