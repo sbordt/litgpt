@@ -11,6 +11,7 @@ from datetime import timedelta
 from functools import partial
 from pathlib import Path
 from typing import Optional, Tuple, Union, Dict
+from contextlib import nullcontext
 
 import lightning as L
 import torch
@@ -22,6 +23,7 @@ from torchmetrics.aggregation import RunningMean
 from typing_extensions import Literal
 
 from torch.distributed.fsdp import FullyShardedDataParallel
+from torch.profiler import profile, ProfilerActivity, record_function
 
 from litgpt import Tokenizer
 from litgpt.args import EvalArgs, TrainArgs
@@ -80,6 +82,8 @@ def setup(
     training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training  
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
+    use_pytorch_profiler: bool = False,
+    logger_kwargs: Optional[Dict] = None,
 ):
     """Pretrain a model.
 
@@ -138,8 +142,14 @@ def setup(
     # in case the dataset requires the Tokenizer
     tokenizer = Tokenizer(tokenizer_dir) if tokenizer_dir is not None else None
 
+    # check if "name" is in logger_kwargs and use it as the run name
+    run_name = f"pretrain-{config.name}"
+    if logger_kwargs and "name" in logger_kwargs:
+        run_name = logger_kwargs["name"]
+        del logger_kwargs["name"]
+        
     logger = choose_logger(
-        logger_name, out_dir, name=f"pretrain-{config.name}", resume=bool(resume), log_interval=train.log_interval, entity="mup_limitations"
+        logger_name, out_dir, name=run_name, resume=bool(resume), log_interval=train.log_interval, entity="mup_limitations", **(logger_kwargs or {})
     )
 
     if devices * num_nodes > 1:
@@ -181,6 +191,7 @@ def setup(
         training_monitor,
         initialize_weights_fn,
         get_lr_fn,
+        use_pytorch_profiler,
     )
 
 
@@ -201,6 +212,7 @@ def main(
     training_monitor :TrainingMonitor = None,
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
+    use_pytorch_profiler: bool = False,
 ) -> None:
     if initialize_weights_fn is None:
         initialize_weights_fn = initialize_weights
@@ -291,7 +303,8 @@ def main(
         eval,
         training_monitor, 
         reference_model,
-        get_lr_fn)
+        get_lr_fn,
+        use_pytorch_profiler)
 
     # Save final checkpoint
     save_checkpoint(fabric, state, tokenizer_dir, out_dir / "final" / "lit_model.pth")
@@ -326,6 +339,7 @@ def fit(
     training_monitor :TrainingMonitor = None,
     reference_model: Optional[nn.Module] = None,
     get_lr_fn: Optional[callable] = None,
+    use_pytorch_profiler: bool = False,
 ) -> None:
     if get_lr_fn is None:
         get_lr_fn = get_lr
@@ -374,6 +388,22 @@ def fit(
     # if we are training on a single gpu, monitor intermediate activation differences
     #if fabric.world_size == 1:
     #    training_monitor.monitor_activation_differences(reference_model)
+
+    # profile the training with the pytorch profiler (optional)
+    if use_pytorch_profiler:
+        profiler = profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            schedule=torch.profiler.schedule(wait=5, warmup=1, active=3, repeat=1),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(out_dir / "torch_profiler"),
+            record_shapes=True,
+            with_stack=True,
+            profile_memory=True,
+            with_flops=True,
+        )
+        profiler.start()
+        fabric.print("Profiling with Pytorch profiler.")
+    else:
+        profiler = nullcontext()
 
     # mointoring of the first step
     training_monitor.set_step(state["step_count"]+1)
@@ -450,6 +480,9 @@ def fit(
             optimizer.zero_grad()
             state["step_count"] += 1
 
+            if use_pytorch_profiler:
+                profiler.step()
+
         if state["iter_num"] % log_iter_interval == 0:
             loss = running_loss.compute().item()  # expensive device-to-host synchronization
             t1 = time.perf_counter()
@@ -510,6 +543,9 @@ def fit(
         if not is_accumulating:
             training_monitor.set_step(state["step_count"]+1)
 
+    if use_pytorch_profiler:
+        profiler.stop()
+        fabric.print(profiler.key_averages().table(sort_by="cuda_time_total", row_limit=20))
 
     # Final validation
     if eval.final_validation:
@@ -520,8 +556,12 @@ def fit(
         fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
 
 
+
 @torch.no_grad()
 def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max_iters: int, verbose: bool = True) -> torch.Tensor:
+    if max_iters == 0: # allow the user to skip validation
+        return torch.tensor(42, device=fabric.device)
+
     fabric.barrier()
     if verbose:
         fabric.print("Validating ...")
