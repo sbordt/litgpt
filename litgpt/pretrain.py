@@ -293,22 +293,29 @@ def main(
     # shape of the first batch of data
     fabric.print(f"Shape of the first batch of data: {next(iter(train_dataloader)).shape}") 
 
-    if torch.cuda.is_available():
-        fabric.print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-        fabric.print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+    fabric.print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+    fabric.print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 
-    resume = find_resume_path(resume, out_dir)
+    # THIS IS THE ORIGINAL LITGPT RESUME TRAINING CODE THAT WE ARE NOT USING BECAUSE IT ALLOCATES EXCESS MEMORY
+    #resume = find_resume_path(resume, out_dir)
+    #if resume:
+    #    fabric.print(f"Resuming training from {resume}")
+    #    fabric.load(resume, state)
+
+    resume = find_resume_path(resume, out_dir) # this is our own resume training code
     if resume:
+        checkpoint = torch.load(resume, map_location='cpu')
+        model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        train_dataloader
+        state['iter_num'] = checkpoint['iter_num']
+        state['step_count'] = checkpoint['step_count']
         fabric.print(f"Resuming training from {resume}")
-        fabric.load(resume, state)
+        del checkpoint
 
-    time.sleep(5)
     torch.cuda.empty_cache()
-    time.sleep(5)
-
-    if torch.cuda.is_available():
-        fabric.print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-        fabric.print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+    fabric.print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+    fabric.print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 
     train_time = time.perf_counter()
     fit(fabric,
@@ -427,7 +434,21 @@ def fit(
     # mointoring of the first step
     training_monitor.set_step(state["step_count"]+1)
 
+    resume_data_iteration = False
+    if state["iter_num"] > 0:
+        fabric.print(f"We choose the hacky way to resume the dataloader by iterating over it again.")
+        resume_data_iteration = True
+        resume_iter_num = 0
+
     for train_data in train_iterator:
+        # resume the dataloader by iterating over it again
+        if resume_data_iteration:
+            if resume_iter_num == state["iter_num"]:
+                resume_data_iteration = False
+                fabric.print(f"Resuming the dataloader after {resume_iter_num} iterations.")
+            resume_iter_num += 1
+            continue
+
         if state["iter_num"] >= max_iters:
             break
 
