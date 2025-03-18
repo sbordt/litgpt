@@ -449,6 +449,7 @@ def fit(
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
 
         # monitor the first forward pass in detail
+        training_monitor.set_verbose(False)
         if state["iter_num"] == 1:
             training_monitor.set_verbose(True)
 
