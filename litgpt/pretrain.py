@@ -293,10 +293,22 @@ def main(
     # shape of the first batch of data
     fabric.print(f"Shape of the first batch of data: {next(iter(train_dataloader)).shape}") 
 
+    if torch.cuda.is_available():
+        fabric.print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        fabric.print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+
     resume = find_resume_path(resume, out_dir)
     if resume:
         fabric.print(f"Resuming training from {resume}")
         fabric.load(resume, state)
+
+    time.sleep(5)
+    torch.cuda.empty_cache()
+    time.sleep(5)
+
+    if torch.cuda.is_available():
+        fabric.print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        fabric.print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 
     train_time = time.perf_counter()
     fit(fabric,
