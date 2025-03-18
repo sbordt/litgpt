@@ -152,7 +152,7 @@ def setup(
         del logger_kwargs["name"]
         
     logger = choose_logger(
-        logger_name, out_dir, name=run_name, resume=bool(resume), log_interval=train.log_interval, entity="mup_limitations", **(logger_kwargs or {})
+        logger_name, out_dir, name=run_name, resume=False, log_interval=train.log_interval, entity="mup_limitations", **(logger_kwargs or {})  # need to check how to setup wandb resuming
     )
 
     if devices * num_nodes > 1:
