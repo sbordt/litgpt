@@ -81,7 +81,8 @@ def setup(
     tokenizer_dir: Optional[Path] = None,
     logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
-    training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training  
+    training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training
+    with_reference_model: bool = True,         # whether the pre-training script should do forward passes with the reference model (i.e. the model at time step zero)  
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -191,6 +192,7 @@ def setup(
         eval,
         optimizer,
         training_monitor,
+        with_reference_model,
         initialize_weights_fn,
         get_lr_fn,
         use_pytorch_profiler,
@@ -212,6 +214,7 @@ def main(
     eval: EvalArgs,
     optimizer: Union[str, Dict],
     training_monitor :TrainingMonitor = None,
+    with_reference_model: bool = True,
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -229,10 +232,11 @@ def main(
     t0 = time.perf_counter()
     with fabric.init_module(empty_init=True):
         model = GPT(config)
-        reference_model = GPT(config) 
+        reference_model = GPT(config) if with_reference_model else None
 
     initialize_weights_fn(fabric, model, n_layer=config.n_layer, n_embd=config.n_embd)
-    reference_model.load_state_dict(model.state_dict()) # the reference model is the model with the weights at time step zero
+    if reference_model is not None:
+        reference_model.load_state_dict(model.state_dict()) # the reference model is the model with the weights at time step zero
 
     if train.tie_embeddings:
         model.transformer.wte.weight = model.lm_head.weight # TODO need this for reference model, too
@@ -246,13 +250,14 @@ def main(
     # model = torch.compile(model)
     model = fabric.setup(model)
 
-    # reference_model = torch.compile(reference_model)
-    reference_model = fabric.setup(reference_model)
+    if reference_model is not None:
+        # reference_model = torch.compile(reference_model)
+        reference_model = fabric.setup(reference_model)
 
     # lightning performs re-initialization of model weights with FSDP.
     # we need to re-load the weights of the reference model
     # After both models are FSDP wrapped and setup
-    if isinstance(fabric.strategy, FSDPStrategy):
+    if reference_model is not None and isinstance(fabric.strategy, FSDPStrategy):
         with FullyShardedDataParallel.summon_full_params(model):
             with FullyShardedDataParallel.summon_full_params(reference_model):
                 reference_model.load_state_dict(model.state_dict())
@@ -388,7 +393,7 @@ def fit(
     training_monitor.set_reference_module(reference_model)
 
     # if we are training on a single gpu, monitor intermediate activation differences
-    if fabric.world_size == 1:
+    if fabric.world_size == 1 and reference_model is not None:
         training_monitor.monitor_activation_differences(reference_model)
 
     # profile the training with the pytorch profiler (optional)
@@ -438,7 +443,7 @@ def fit(
         with fabric.no_backward_sync(model, enabled=is_accumulating):
             # if we are monitoring the training step, we need to perform a forward pass with the reference model
             # currently, we assume that all tensors and models are on the same device
-            if training_monitor.is_monitoring():
+            if training_monitor.is_monitoring() and reference_model is not None:
                 with torch.no_grad():
                     _ = reference_model(input_ids)
 
@@ -454,13 +459,16 @@ def fit(
         if not is_accumulating:
             training_monitor.after_forward() # the forward passes are over, gather activation statistics
 
-            if fabric.world_size > 1: # FSDP requires parameter and gradient gathering for monitoring
-                if training_monitor.is_monitoring(): # gather only if we are monitoring
-                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True):
+            if fabric.world_size > 1 and fabric.global_rank == 0 and training_monitor.is_monitoring(): # FSDP requires parameter and gradient gathering for monitoring (rank0 only)
+                if reference_model is not None:
+                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True): # gather both model and reference model parameters
                         with FullyShardedDataParallel.summon_full_params(reference_model):
-                            if fabric.global_rank == 0:
                                 training_monitor.monitor_parameters()                       
                                 training_monitor.monitor_gradients(before_clip=True)
+                else:
+                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True): # gather only model parameters
+                        training_monitor.monitor_parameters()
+                        training_monitor.monitor_gradients(before_clip=True)
             else:
                 training_monitor.monitor_parameters()
                 training_monitor.monitor_gradients(before_clip=True)
@@ -469,12 +477,14 @@ def fit(
             if grad_norm is not None:
                 training_monitor.monitor_scalars({"grad_norm": grad_norm})
 
-            if fabric.world_size > 1: # same as above
-                if training_monitor.is_monitoring(): # gather only if we are monitoring
+            if fabric.world_size > 1 and fabric.global_rank == 0 and training_monitor.is_monitoring(): # same as above but after gradient clipping
+                if reference_model is not None:
                     with FullyShardedDataParallel.summon_full_params(model, with_grads=True):
-                        with FullyShardedDataParallel.summon_full_params(reference_model):
-                            if fabric.global_rank == 0:
+                        with FullyShardedDataParallel.summon_full_params(reference_model):                    
                                 training_monitor.monitor_gradients()
+                else:
+                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True): 
+                        training_monitor.monitor_gradients()
             else:
                 training_monitor.monitor_gradients()
             

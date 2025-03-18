@@ -189,8 +189,12 @@ class TrainingMonitor:
         # remove any previous reference module
         self.remove_reference_module()
 
-        # register the modules via their names and set forward hooks
         self.reference_module = module
+        if module is None:
+            return
+        
+        # setup for the new reference module
+        # register the modules via their names and set forward hooks
         for name, m in module.named_modules():
             self.reference_module_names[m] = format_module_name(name)
             self.reference_module_hooks[m] = m.register_forward_hook(self._get_reference_activation_forwad_hook())
