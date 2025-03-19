@@ -121,6 +121,8 @@ class ModuleMonitor:
                  activation_difference_metric_spec=None): 
         """Init the training monitor."""
         self.module = None
+        self.module_names = {}                                  # a mapping of modules to their names as used for logging
+
         self.reference_module = None
 
         # activation monitoring
@@ -130,10 +132,10 @@ class ModuleMonitor:
         self.registered_activation_hooks = []                   # a list of currently registered forward hooks (for cleanup)
 
 
+        # activation difference monitoring
 
-        self.module_hooks = {}
         self.activation_difference_hooks = {}   # used by monitor_activation_differences
-        self.module_names = {}                  # a mapping from modules to their names
+        
 
         self.reference_module = None
         self.reference_module_hooks = {}
