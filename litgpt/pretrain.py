@@ -246,8 +246,7 @@ def main(
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters: {num_parameters(model):,}")
 
-    # turn off compilation because it leads to warnings with the hooks that I would like to understand better (?)
-    # model = torch.compile(model)
+    model = torch.compile(model)
     model = fabric.setup(model)
 
     if reference_model is not None:
