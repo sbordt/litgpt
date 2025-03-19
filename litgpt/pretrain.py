@@ -411,8 +411,8 @@ def fit(
     training_monitor.set_reference_module(reference_model)
 
     # if we are training on a single gpu, monitor intermediate activation differences
-    if fabric.world_size == 1 and reference_model is not None:
-        training_monitor.monitor_activation_differences(reference_model)
+    #if fabric.world_size == 1 and reference_model is not None:
+    #    training_monitor.monitor_activation_differences(reference_model)
 
     # profile the training with the pytorch profiler (optional)
     if use_pytorch_profiler:
