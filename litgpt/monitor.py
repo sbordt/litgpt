@@ -56,10 +56,10 @@ def sparsity(tensor: torch.Tensor, threshold: float = 1e-6) -> torch.Tensor:
 
 
 #################################################################
-# Modules can subclass MonitoredModule to implement
+# Modules can subclass MonitorMixin to implement
 # custom monitoring behavior.
 #################################################################
-class MonitoredModule:
+class MonitorMixin:
     """A torch.nn.Module can subclass this class to log custom metrics during the forward pass.
     This is used to monitor the attention operation.
 
@@ -84,10 +84,10 @@ class MonitoredModule:
 
 
 #################################################################
-# The training mointor class
+# The module mointor class
 #################################################################
-class TrainingMonitor:
-    """Monitor the training of a pytorch modules.
+class ModuleMonitor:
+    """Monitor the training of a pytorch module.
 
     Supports a reference module and micro-batches. 
 
@@ -115,12 +115,22 @@ class TrainingMonitor:
                  monitor_interval = 20,
                  step_start = 0,
                  monitor = True,
-                 activation_metrics=None,
-                 parameter_metrics=None,
-                 gradient_metrics=None,
-                 activation_difference_metrics=None): 
+                 activation_metric_spec=None,
+                 parameter_metric_spec=None,
+                 gradient_metric_spec=None,
+                 activation_difference_metric_spec=None): 
         """Init the training monitor."""
         self.module = None
+        self.reference_module = None
+
+        # activation monitoring
+        self.activation_metric_spec = activation_metric_spec    # the user-specified strategy for monitoring activations
+        self.activation_metrics = {}                            # a mapping of modules to a list of metrics that are computed on their activations. this is the result of compiling activation_metric_spec for a particular module
+        self.activation_hooks = {}                              # a mapping of modules to forward hooks to monitor their activations. This will only include modules that are actually monitored.
+        self.registered_activation_hooks = []                   # a list of currently registered forward hooks (for cleanup)
+
+
+
         self.module_hooks = {}
         self.activation_difference_hooks = {}   # used by monitor_activation_differences
         self.module_names = {}                  # a mapping from modules to their names
@@ -139,10 +149,10 @@ class TrainingMonitor:
         self.monitor_step = False # do we monitor the current gradient step?
         self.log_dict = {} # a dict to log the parameters, activations, etc. of all gradient steps. maps the step number to the log dict of that step.
 
-        self.activation_metrics = activation_metrics if activation_metrics is not None else {"l2norm": l2_norm}
-        self.parameter_metrics = parameter_metrics if parameter_metrics is not None else {"l2norm": l2_norm}
-        self.gradient_metrics = gradient_metrics if gradient_metrics is not None else {"l2norm": l2_norm}
-        self.activation_difference_metrics = activation_difference_metrics if activation_difference_metrics is not None else {"l2norm": lambda x, y: l2_norm(x - y)}
+        self.activation_metrics = activation_metric_spec if activation_metric_spec is not None else {"l2norm": l2_norm}
+        self.parameter_metrics = parameter_metric_spec if parameter_metric_spec is not None else {"l2norm": l2_norm}
+        self.gradient_metrics = gradient_metric_spec if gradient_metric_spec is not None else {"l2norm": l2_norm}
+        self.activation_difference_metrics = activation_difference_metric_spec if activation_difference_metric_spec is not None else {"l2norm": lambda x, y: l2_norm(x - y)}
 
         if module is not None:
             self.set_module(module)
@@ -168,7 +178,7 @@ class TrainingMonitor:
             self.module_names = {}
             # if the module implements the MonitoredModule interface, remove the training monitor
             for _, m in module.named_modules():
-                if isinstance(m, MonitoredModule):
+                if isinstance(m, MonitorMixin):
                     m.set_training_monitor(None, False)
 
         # setup for the new module
@@ -179,7 +189,7 @@ class TrainingMonitor:
             if self.verbose:
                 print("Info: Registered forward hook for module ", name)
             # if the module implements the MonitoredModule interface, set the training monitor
-            if isinstance(m, MonitoredModule):
+            if isinstance(m, MonitorMixin):
                 m.set_training_monitor(self, False)
 
 
@@ -200,7 +210,7 @@ class TrainingMonitor:
             self.reference_module_hooks[m] = m.register_forward_hook(self._get_reference_activation_forwad_hook())
 
             # if the module implements the MonitoredModule interface, set the training monitor
-            if isinstance(m, MonitoredModule):
+            if isinstance(m, MonitorMixin):
                 m.set_training_monitor(self, True)
 
         # register the parameters of the reference module
@@ -217,7 +227,7 @@ class TrainingMonitor:
             return
         # notify the MonitoredModules
         for _, m in self.reference_module.named_modules():
-            if isinstance(m, MonitoredModule):
+            if isinstance(m, MonitorMixin):
                 m.set_training_monitor(None, False)
         # remove the reference module
         self.reference_module = None
@@ -238,14 +248,10 @@ class TrainingMonitor:
     #################################################################
     # Set the current step, get log dict
     #################################################################
-    def set_step(self, step):
+    def start_step(self, step):
         """Notify the monitor that a new step has started. This function should be called before the forward pass. Returns True if the step should be monitored, False otherwise."""
         # clean-up any previous step (if not done already)
         self.reference_module_activations = {}
-        
-        self.monitor_step = False
-        if not self.monitor: # do not monitor
-            return False
         
         # check that there is a module to monitor
         if self.module is None:
@@ -259,11 +265,36 @@ class TrainingMonitor:
         if not self.monitor_step and step <= 100: # more frequent monitoring for the first 100 steps
             self.monitor_step = step % 20 == 1
 
-        # if we monitor this step, create a new entry in the log dict
+        # global toggle to turn of monitoring
+        if not self.monitor: 
+            self.monitor_step = False
+
+        # if we monitor this step, create a new entry in the log dict and register all hooks
         if self.monitor_step: 
             self.log_dict[step] = {}
-            
+            self._register_all_hooks()
+
         return self.monitor_step
+    
+    
+    def aggregate_step(self):
+        """Aggregate the statistics of the current step. This function should be called after all monitoring for the current step is done."""
+        if not self.is_monitoring():
+            return
+        
+        self._aggregate_activation_statistics()
+        self._remove_all_hooks()
+        self._clear_reference_activations()
+    
+
+    def _register_all_hooks(self):
+        """Register all hooks that are needed to monitor the current step."""
+        self._register_all_activation_hooks()
+
+
+    def _remove_all_hooks(self):
+        """Remove all hooks that were registered to monitor the current step."""
+        pass
     
 
     def is_monitoring(self):
@@ -280,6 +311,420 @@ class TrainingMonitor:
     def get_all_metrics(self):
         """Return the full log dict with all steps that have been logged so far."""
         return self.log_dict
+
+
+
+
+
+    #################################################################
+    # Basic logging functions
+    #################################################################
+    def log_scalar(self, key: str, value, force=False):
+        """Monitor a scalar value such as the loss or the learning rate.
+        
+        If force is set to True, the value is logged even if we are not monitoring the current step.
+        This is useful to monitor values like the final validation loss.
+
+        A scalar value is first logged internally as an individual value to the given key.
+        If the same key is logged again, loggend values are stored in a list and subsquently aggregated by after_forward.
+        """
+        if not self.is_monitoring() and not force:
+            return
+        
+        if force and self.step not in self.log_dict:
+            self.log_dict[self.step] = {}
+
+        # if value is a tensor, it has to be a scalar value so we call item()
+        if isinstance(value, torch.Tensor):
+            value = value.item()
+
+        # verify that value is a number
+        if not isinstance(value, Number):
+            raise ValueError("Value must be a number.")
+        
+        if key in self.log_dict[self.step]: # log different values of the same key in a list
+            if not isinstance(self.log_dict[self.step][key], list):
+                self.log_dict[self.step][key] = [self.log_dict[self.step][key]]
+            self.log_dict[self.step][key].append(value)
+        else:
+            self.log_dict[self.step][key] = value
+
+
+    def log_tensor(self, key: str, tensor: torch.Tensor, force=False):
+        """Monitor a torch.Tensor.
+
+        Tensors are stored in a list and aggregated by after_forward.
+        
+        Args:
+            key (str): The key under which to log the tensor metrics.
+            tensor (torch.Tensor): The tensor to monitor.
+            force (bool): Whether to log even if not monitoring the current step.
+        """
+        if not self.is_monitoring() and not force:
+            return
+        
+        if force and self.step not in self.log_dict:
+            self.log_dict[self.step] = {}
+
+        # detach and flatten the tensor
+        tensor = tensor.detach().flatten()
+
+        # tensors are stored in a list before aggregation
+        if key in self.log_dict[self.step]:
+            self.log_dict[self.step][key].append(tensor)
+        else:
+            self.log_dict[self.step][key] = [tensor]
+
+
+    def monitor_scalars(self, monitor_dict: dict, force=False):
+        """Monitor a dictionary of scalar values."""
+        for key, value in monitor_dict.items():
+            self.log_scalar(key, value, force=force)
+
+
+    #################################################################
+    # Activations are logged with forward hooks
+    #################################################################
+    def monitor_activations(self, 
+                            module :Union[str, torch.nn.Module], 
+                            activations :torch.Tensor,
+                            is_reference :bool = False):
+        """Monitor the activations of a module.
+
+           This function is automatically called by the forward hooks that are registered on all modules of a monitored model.
+        
+           In addition, this function can be used to monitor activations that are not the output of a module.
+           This is what monitor_scaled_dot_product_attention does.
+        """
+        if not self.is_monitoring():
+            return
+
+        # assert that module_name is a string
+        module_name = self._module_name(module, is_reference)
+
+        # detach activations from the graph but keep on the device
+        activations = activations.detach()
+
+        # if called with the activations of the reference module, store them in the reference_module_activations dict
+        if is_reference:
+            if self.ignore_reference_module_activations:
+                return
+
+            # raise a warning if no reference module is set
+            if not self.has_reference_module():
+                print(f"Warning: Attempted to monitor activations of the reference module, but no reference module is set (for module {module_name}).")
+                return
+            # raise a warning if the reference module has already stored activations for this module
+            if module_name in self.reference_module_activations:
+                print(f"Warning: Attempted to monitor activations of the reference module for module {module_name}, but activations are already stored.")
+                return
+            # store the activations
+            self.reference_module_activations[module_name] = activations 
+            # we are done
+            return
+
+        # monitor the different activation metrics
+        for metric_name, metric_fn in self.activation_metrics.items():
+            # compute the metric
+            result = metric_fn(activations)
+
+            # monitor the metric
+            log_entry = f"{module_name}.activation.{metric_name}"
+            self.log_tensor(log_entry, result)
+
+        # metrics based on the activations and the reference activations (most likely L2 norm)
+        if self.has_reference_module():
+            if module_name in self.reference_module_activations:
+                ref_activations = self.reference_module_activations[module_name]
+
+                for metric_name, metric_fn in self.activation_difference_metrics.items():
+                    # compute the metric
+                    result = metric_fn(activations, ref_activations)
+
+                    log_entry = f"{module_name}.activation.diff.{metric_name}"
+                    self.log_tensor(log_entry, result)
+            else:
+                if self.verbose:
+                    print("Warning: No reference module activations found for module ", module_name)
+
+        if self.verbose:
+            print("Info: Monitored activations of module ", module_name, " with shape ", activations.shape)
+
+
+    def _get_activation_forwad_hook(self, module_name : str):
+        def hook(module, input, output):
+            self.monitor_activations(module_name, output, is_reference=False)
+        return hook
+    
+
+    def _get_reference_activation_forwad_hook(self):
+        def hook(module, input, output):
+            self.monitor_activations(module, output, is_reference=True)
+        return hook
+    
+
+    def _clear_reference_activations(self):
+        """Clear the reference module activations. To be called after a mini-batch is done."""
+        self.reference_module_activations = {}
+
+
+    def _register_all_activation_hooks(self):
+        # module
+        for name, m in self.module.named_modules():
+            self.module_names[m] = format_module_name(name)
+            self.module_hooks[m] = m.register_forward_hook(self._get_activation_forwad_hook(self.module_names[m]))
+            if self.verbose:
+                print("Info: Registered forward hook for module ", name)
+    
+
+    def _aggregate_activation_statistics(self):
+        """This function is called after all mini-batches of a gradient step are done. It aggregates the batch statistics. """
+        if self.is_monitoring():
+            # aggregate metrics
+            #suffixes = list(self.activation_metrics.keys())
+
+            for k, v in list(self.log_dict[self.step].items()): # iterate over a copy because we modify the original dict
+                if type(v) == list: #  and any(k.endswith(f".{suffix}") for suffix in suffixes)
+                    if isinstance(v[0], torch.Tensor): # list of tensors (activations)
+                        v = torch.cat(v)
+                        self.log_dict[self.step][k] = torch.mean(v).item()
+                        self.log_dict[self.step][k + ".std"] = torch.std(v).item()
+                    else: # list of scalars
+                        self.log_dict[self.step][k] = np.mean(v)
+                        self.log_dict[self.step][k + ".std"] = np.std(v)
+
+            # print total number of keys
+            if self.verbose:
+                print("Training Monitor: Total number of logging keys in the current step:", len(self.log_dict[self.step]))
+
+                # size of the dict in mb
+                import sys
+                size = sys.getsizeof(self.log_dict) / 1024 / 1024
+                print("Training Monitor: Size of log_dict in MB:", size)
+
+
+    #######################################################################################
+    # Monitoring of activation differences with  requires additional forward passes.
+    #######################################################################################
+    def monitor_activation_differences(self, comparison_model: torch.nn.Module):
+        """Mointor the difference in activations between the monitored module and a comparison module. This can be used to perform a muP coordinate check.
+
+        When this function is called by the user, the training monitor performs additional computations to compare the intermediate activations of the monitored module and the comparison module.
+
+        During a forward pass of the monitored module, we pass the input of every module also into the corresponding module of the comparison model and monitor the difference of the outputs.
+        This means that we perform a forward operation in the comparison model with the **intermediate** input activations of the monitored module.
+        The comparison module must have the same architecture as the monitored module. It can, but does not have to be the reference module.
+
+        The comparison model must be set before the forward pass of the monitored module.
+        
+        Note: This function only works if the monitored module and the comparison module are on the same (single) device. This does NOT work with FSDP.
+        """
+        if self.module is None:
+            raise ValueError("No module to monitor. Please set the module first.")
+
+        # validate that we can find all modules in the comparison model
+        modules = dict(self.module.named_modules())
+        comparison_modules = dict(comparison_model.named_modules())
+
+        for name in modules.keys(): 
+            if not name in comparison_modules:
+                raise ValueError(f"Module {name} not found in the comparison model.")
+            
+        # remove any previous activation_difference_hooks
+        for hook in self.activation_difference_hooks.values():
+            hook.remove()
+        self.activation_difference_hooks = {}
+            
+        # register hooks to perform the additional forward passes
+        for name in modules.keys():
+            mod = modules[name]
+            comp_mod = comparison_modules[name]
+            self.activation_difference_hooks[mod] = mod.register_forward_hook(self._get_activation_differences_forwad_hook(self.module_names[mod], comp_mod))
+         
+
+    def _get_activation_differences_forwad_hook(self, module_name : str, comp_mod: torch.nn.Module):
+        def hook(module, input, output):
+            if not self.is_monitoring():
+                return
+
+            # every part of the input that is a tensor needs to be detached from the computational graph
+            input = (i.detach() if isinstance(i, torch.Tensor) else i for i in input)
+
+            # perform an additional forward pass in the comparison module
+            with torch.no_grad():
+                self.ignore_reference_module_activations = True      # temporarily ignore reference module activation hooks (relevant if the comparison module is the reference module)
+                comp_output = comp_mod(*input)
+                self.ignore_reference_module_activations = False
+
+            # compute difference metrics
+            for metric_name, metric_fn in self.activation_difference_metrics.items():
+                # compute the metric
+                result = metric_fn(output, comp_output.detach())
+
+                # monitor the metric
+                log_entry = f"{module_name}.activation.intermediate_diff.{metric_name}"
+                self.log_tensor(log_entry, result)
+
+        return hook
+
+
+    #################################################################
+    # Monitor the activations inside a scaled dot product attention operation
+    # This function has to be called by the monitored module
+    #################################################################
+    def monitor_scaled_dot_product_attention(self,
+                                             module :Union[str, torch.nn.Module],  # the module that calls the attention function
+                                             query :torch.Tensor, 
+                                             key :torch.Tensor, 
+                                             value :torch.Tensor,
+                                             attn_mask=None, 
+                                             dropout_p=0.0,
+                                             is_causal=False, 
+                                             scale=None, 
+                                             enable_gqa=False,
+                                             activation :torch.Tensor = None, # the return value of torch.nn.functional.scaled_dot_product_attention (optional)
+                                             is_reference :bool = False): 
+        """Monitor a scaled dot product attention operation. 
+        Follows the signature of the pytorch function torch.nn.functional.scaled_dot_product_attention.
+        """
+        module_name = self._module_name(module, is_reference)
+
+        if self.verbose:
+            print("Info: Monitoring scaled dot product attention for module ", module_name, " with query shape ", query.shape, " key shape ", key.shape, " value shape ", value.shape)
+
+        # the monitoring here is VERY inefficient, as we have to recompute the attention weights
+        # first, we detach all tensors from the computational graph
+        query = query.detach()
+        key = key.detach()
+        value = value.detach()
+        if activation is not None:
+            activation = activation.detach()
+        if attn_mask is not None:
+            attn_mask = attn_mask.detach()
+
+        # now we follow the reference implementation, see https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
+        L, S = query.size(-2), key.size(-2)
+        scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+        attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device) 
+        if is_causal:
+            assert attn_mask is None
+            temp_mask = torch.ones(L, S, dtype=torch.bool, device=query.device).tril(diagonal=0)
+            attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+            attn_bias.to(query.dtype)
+
+        if attn_mask is not None:
+            if attn_mask.dtype == torch.bool:
+                attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+            else:
+                attn_bias += attn_mask
+
+        if enable_gqa:
+            key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
+            value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
+
+        # monitoring for multi-head attention with n heads
+        if S == L and query.size(-3) == key.size(-3) and query.size(-1) == value.size(-1):
+            n_head = query.size(-3)
+            for i_head in range(n_head):
+                q = query[..., i_head, :, :]        # [B, S, D]
+                k = key[..., i_head, :, :]
+                v = value[..., i_head, :, :]
+                if activation is not None:
+                    o = activation[..., i_head, :, :]
+
+                self.monitor_activations(f"{module_name}.head_{i_head}.query", q, is_reference=is_reference)
+                self.monitor_activations(f"{module_name}.head_{i_head}.key", k, is_reference=is_reference)
+                self.monitor_activations(f"{module_name}.head_{i_head}.value", v, is_reference=is_reference)
+                if activation is not None:
+                    self.monitor_activations(f"{module_name}.head_{i_head}.activation", o, is_reference=is_reference)
+        else:
+            if self.verbose:
+                print("Warning: monitor_scaled_dot_product_attention assumes that S == L and that the key query and value tensor have the same dimension.")
+
+        attn_weight = query @ key.transpose(-2, -1) * scale_factor
+        attn_weight += attn_bias
+        attn_weight = torch.softmax(attn_weight, dim=-1)
+        attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+
+        # monitor entropy of the attention weights
+        if S == L and query.size(-3) == key.size(-3) and query.size(-1) == value.size(-1):
+            n_head = query.size(-3)
+            for i_head in range(n_head):
+                w = attn_weight[..., i_head, :, :]
+                entropy = -torch.sum(w * torch.log(w + 1e-8), dim=-1)
+                self.log_tensor(f"{module_name}.head_{i_head}.attention_entropy", entropy)
+
+                if self.verbose:
+                    print("Info: Monitored attention entropy for head ", module_name, " with shape ", entropy.shape)
+        # return attn_weight @ value [This is provided in the activation argument]
+
+
+    #################################################################
+    # Logging of gradients
+    #################################################################
+    def monitor_gradients(self, before_clip=False):
+        if not self.is_monitoring():
+            return
+        
+        for name, param in self.module.named_parameters():
+            if param.grad is None:
+                if self.verbose:
+                    print("Warning: Found a parameter where the gradient is None:", name)
+                continue
+
+            # log the different metrics (most likely the frobenius norm of the gradients)
+            for metric_name, metric_fn in self.gradient_metrics.items():
+                # we apply the metrics to the flattened gradient tensor
+                result = metric_fn(param.grad.detach().flatten())
+
+                # if result is a tensor, apply item()
+                if isinstance(result, torch.Tensor):
+                    result = result.item()
+
+                # Create log entry
+                log_entry = f"{format_module_name(name)}.gradient.{metric_name}"
+                if before_clip:
+                    log_entry += ".before_clip"
+
+                self.log_scalar(log_entry, result)
+
+                if self.verbose:
+                    print("Info: Parameter ", name, " has gradient of shape ", param.grad.shape, " with ", metric_name, " ", result, "(logged as ", log_entry, ")")
+
+
+    #################################################################
+    # Logging of parameters
+    #################################################################
+    def monitor_parameters(self):
+        if not self.is_monitoring():
+            return
+        
+        for name, param in self.module.named_parameters():
+
+            # log the different metrics (most likely the frobenius norm of the parameters)
+            for metric_name, metric_fn in self.parameter_metrics.items():
+                # we apply the metrics to the flattened parameter tensor
+                result = metric_fn(param.flatten())
+
+                # if result is a tensor, apply item()
+                if isinstance(result, torch.Tensor):
+                    result = result.item()
+
+                # Create log entry
+                log_entry = f"{format_module_name(name)}.{metric_name}"
+                self.log_scalar(log_entry, result)
+
+                if self.verbose:
+                    print("Info: Parameter ", name, " has shape ", param.shape, " with ", metric_name, " ", result, "(logged as ", log_entry, ")")
+                    
+            # the difference in l2 norm to the reference module
+            if self.reference_module is not None:
+                key = format_module_name(name)
+                ref_param = self.reference_module_parameters[key]
+                log_entry = f"{format_module_name(name)}.diff.l2norm"
+                diff = (param - ref_param).norm(p='fro').item()
+                self.log_scalar(log_entry, diff)
+
 
 
     #################################################################
@@ -379,411 +824,10 @@ class TrainingMonitor:
     @classmethod
     def load_hdf5(cls, filename):
         log_dict = {}
-        for entry_key in TrainingMonitor.read_hdf5_entry_keys(filename):
-            keys, values = TrainingMonitor.read_hdf5_entry(filename, entry_key)
+        for entry_key in ModuleMonitor.read_hdf5_entry_keys(filename):
+            keys, values = ModuleMonitor.read_hdf5_entry(filename, entry_key)
             log_dict[entry_key] = {k: v for (k, v) in zip(list(keys), list(values))}
         return log_dict 
-
-
-    #################################################################
-    # Basic logging functions
-    #################################################################
-    def monitor_scalar(self, key: str, value, force=False):
-        """Monitor a scalar value such as the loss or the learning rate.
-        
-        If force is set to True, the value is logged even if we are not monitoring the current step.
-        This is useful to monitor values like the final validation loss.
-
-        A scalar value is first logged internally as an individual value to the given key.
-        If the same key is logged again, loggend values are stored in a list and subsquently aggregated by after_forward.
-        """
-        if not self.is_monitoring() and not force:
-            return
-        
-        if force and self.step not in self.log_dict:
-            self.log_dict[self.step] = {}
-
-        # if value is a tensor, it has to be a scalar value so we call item()
-        if isinstance(value, torch.Tensor):
-            value = value.item()
-
-        # verify that value is a number
-        if not isinstance(value, Number):
-            raise ValueError("Value must be a number.")
-        
-        if key in self.log_dict[self.step]: # log different values of the same key in a list
-            if not isinstance(self.log_dict[self.step][key], list):
-                self.log_dict[self.step][key] = [self.log_dict[self.step][key]]
-            self.log_dict[self.step][key].append(value)
-        else:
-            self.log_dict[self.step][key] = value
-
-
-    def monitor_tensor(self, key: str, tensor: torch.Tensor, force=False):
-        """Monitor a torch.Tensor.
-
-        Tensors are stored in a list and aggregated by after_forward.
-        
-        Args:
-            key (str): The key under which to log the tensor metrics.
-            tensor (torch.Tensor): The tensor to monitor.
-            force (bool): Whether to log even if not monitoring the current step.
-        """
-        if not self.is_monitoring() and not force:
-            return
-        
-        if force and self.step not in self.log_dict:
-            self.log_dict[self.step] = {}
-
-        # detach and flatten the tensor
-        tensor = tensor.detach().flatten()
-
-        # tensors are stored in a list before aggregation
-        if key in self.log_dict[self.step]:
-            self.log_dict[self.step][key].append(tensor)
-        else:
-            self.log_dict[self.step][key] = [tensor]
-
-
-    def monitor_scalars(self, monitor_dict: dict, force=False):
-        """Monitor a dictionary of scalar values."""
-        for key, value in monitor_dict.items():
-            self.monitor_scalar(key, value, force=force)
-
-
-    #################################################################
-    # Activations are logged with forward hooks
-    #################################################################
-    def monitor_activations(self, 
-                            module :Union[str, torch.nn.Module], 
-                            activations :torch.Tensor,
-                            is_reference :bool = False):
-        """Monitor the activations of a module.
-
-           This function is automatically called by the forward hooks that are registered on all modules of a monitored model.
-        
-           In addition, this function can be used to monitor activations that are not the output of a module.
-           This is what monitor_scaled_dot_product_attention does.
-        """
-        if not self.is_monitoring():
-            return
-
-        # assert that module_name is a string
-        module_name = self._module_name(module, is_reference)
-
-        # detach activations from the graph but keep on the device
-        activations = activations.detach()
-
-        # if called with the activations of the reference module, store them in the reference_module_activations dict
-        if is_reference:
-            if self.ignore_reference_module_activations:
-                return
-
-            # raise a warning if no reference module is set
-            if not self.has_reference_module():
-                print(f"Warning: Attempted to monitor activations of the reference module, but no reference module is set (for module {module_name}).")
-                return
-            # raise a warning if the reference module has already stored activations for this module
-            if module_name in self.reference_module_activations:
-                print(f"Warning: Attempted to monitor activations of the reference module for module {module_name}, but activations are already stored.")
-                return
-            # store the activations
-            self.reference_module_activations[module_name] = activations 
-            # we are done
-            return
-
-        # monitor the different activation metrics
-        for metric_name, metric_fn in self.activation_metrics.items():
-            # compute the metric
-            result = metric_fn(activations)
-
-            # monitor the metric
-            log_entry = f"{module_name}.activation.{metric_name}"
-            self.monitor_tensor(log_entry, result)
-
-        # metrics based on the activations and the reference activations (most likely L2 norm)
-        if self.has_reference_module():
-            if module_name in self.reference_module_activations:
-                ref_activations = self.reference_module_activations[module_name]
-
-                for metric_name, metric_fn in self.activation_difference_metrics.items():
-                    # compute the metric
-                    result = metric_fn(activations, ref_activations)
-
-                    log_entry = f"{module_name}.activation.diff.{metric_name}"
-                    self.monitor_tensor(log_entry, result)
-            else:
-                if self.verbose:
-                    print("Warning: No reference module activations found for module ", module_name)
-
-        if self.verbose:
-            print("Info: Monitored activations of module ", module_name, " with shape ", activations.shape)
-
-
-    def _get_activation_forwad_hook(self, module_name : str):
-        def hook(module, input, output):
-            self.monitor_activations(module_name, output, is_reference=False)
-        return hook
-    
-
-    def _get_reference_activation_forwad_hook(self):
-        def hook(module, input, output):
-            self.monitor_activations(module, output, is_reference=True)
-        return hook
-    
-
-    def clear_reference_activations(self):
-        """Clear the reference module activations. To be called after a mini-batch is done."""
-        self.reference_module_activations = {}
-    
-
-    def after_forward(self):
-        """This function is called after all mini-batches of a gradient step are done. It aggregates the batch statistics. """
-        if self.is_monitoring():
-            # aggregate metrics
-            #suffixes = list(self.activation_metrics.keys())
-
-            for k, v in list(self.log_dict[self.step].items()): # iterate over a copy because we modify the original dict
-                if type(v) == list: #  and any(k.endswith(f".{suffix}") for suffix in suffixes)
-                    if isinstance(v[0], torch.Tensor): # list of tensors (activations)
-                        v = torch.cat(v)
-                        self.log_dict[self.step][k] = torch.mean(v).item()
-                        self.log_dict[self.step][k + ".std"] = torch.std(v).item()
-                    else: # list of scalars
-                        self.log_dict[self.step][k] = np.mean(v)
-                        self.log_dict[self.step][k + ".std"] = np.std(v)
-
-            # print total number of keys
-            if self.verbose:
-                print("Training Monitor: Total number of logging keys in the current step:", len(self.log_dict[self.step]))
-
-                # size of the dict in mb
-                import sys
-                size = sys.getsizeof(self.log_dict) / 1024 / 1024
-                print("Training Monitor: Size of log_dict in MB:", size)
-
-
-    #######################################################################################
-    # Monitoring of activation differences with  requires additional forward passes.
-    #######################################################################################
-    def monitor_activation_differences(self, comparison_model: torch.nn.Module):
-        """Mointor the difference in activations between the monitored module and a comparison module. This can be used to perform a muP coordinate check.
-
-        When this function is called by the user, the training monitor performs additional computations to compare the intermediate activations of the monitored module and the comparison module.
-
-        During a forward pass of the monitored module, we pass the input of every module also into the corresponding module of the comparison model and monitor the difference of the outputs.
-        This means that we perform a forward operation in the comparison model with the **intermediate** input activations of the monitored module.
-        The comparison module must have the same architecture as the monitored module. It can, but does not have to be the reference module.
-
-        The comparison model must be set before the forward pass of the monitored module.
-        
-        Note: This function only works if the monitored module and the comparison module are on the same (single) device. This does NOT work with FSDP.
-        """
-        if self.module is None:
-            raise ValueError("No module to monitor. Please set the module first.")
-
-        # validate that we can find all modules in the comparison model
-        modules = dict(self.module.named_modules())
-        comparison_modules = dict(comparison_model.named_modules())
-
-        for name in modules.keys(): 
-            if not name in comparison_modules:
-                raise ValueError(f"Module {name} not found in the comparison model.")
-            
-        # remove any previous activation_difference_hooks
-        for hook in self.activation_difference_hooks.values():
-            hook.remove()
-        self.activation_difference_hooks = {}
-            
-        # register hooks to perform the additional forward passes
-        for name in modules.keys():
-            mod = modules[name]
-            comp_mod = comparison_modules[name]
-            self.activation_difference_hooks[mod] = mod.register_forward_hook(self._get_activation_differences_forwad_hook(self.module_names[mod], comp_mod))
-         
-
-    def _get_activation_differences_forwad_hook(self, module_name : str, comp_mod: torch.nn.Module):
-        def hook(module, input, output):
-            if not self.is_monitoring():
-                return
-
-            # every part of the input that is a tensor needs to be detached from the computational graph
-            input = (i.detach() if isinstance(i, torch.Tensor) else i for i in input)
-
-            # perform an additional forward pass in the comparison module
-            with torch.no_grad():
-                self.ignore_reference_module_activations = True      # temporarily ignore reference module activation hooks (relevant if the comparison module is the reference module)
-                comp_output = comp_mod(*input)
-                self.ignore_reference_module_activations = False
-
-            # compute difference metrics
-            for metric_name, metric_fn in self.activation_difference_metrics.items():
-                # compute the metric
-                result = metric_fn(output, comp_output.detach())
-
-                # monitor the metric
-                log_entry = f"{module_name}.activation.intermediate_diff.{metric_name}"
-                self.monitor_tensor(log_entry, result)
-
-        return hook
-
-
-    #################################################################
-    # Monitor the activations inside a scaled dot product attention operation
-    # This function has to be called by the monitored module
-    #################################################################
-    def monitor_scaled_dot_product_attention(self,
-                                             module :Union[str, torch.nn.Module],  # the module that calls the attention function
-                                             query :torch.Tensor, 
-                                             key :torch.Tensor, 
-                                             value :torch.Tensor,
-                                             attn_mask=None, 
-                                             dropout_p=0.0,
-                                             is_causal=False, 
-                                             scale=None, 
-                                             enable_gqa=False,
-                                             activation :torch.Tensor = None, # the return value of torch.nn.functional.scaled_dot_product_attention (optional)
-                                             is_reference :bool = False): 
-        """Monitor a scaled dot product attention operation. 
-        Follows the signature of the pytorch function torch.nn.functional.scaled_dot_product_attention.
-        """
-        module_name = self._module_name(module, is_reference)
-
-        if self.verbose:
-            print("Info: Monitoring scaled dot product attention for module ", module_name, " with query shape ", query.shape, " key shape ", key.shape, " value shape ", value.shape)
-
-        # the monitoring here is VERY inefficient, as we have to recompute the attention weights
-        # first, we detach all tensors from the computational graph
-        query = query.detach()
-        key = key.detach()
-        value = value.detach()
-        if activation is not None:
-            activation = activation.detach()
-        if attn_mask is not None:
-            attn_mask = attn_mask.detach()
-
-        # now we follow the reference implementation, see https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
-        L, S = query.size(-2), key.size(-2)
-        scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
-        attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device) 
-        if is_causal:
-            assert attn_mask is None
-            temp_mask = torch.ones(L, S, dtype=torch.bool, device=query.device).tril(diagonal=0)
-            attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
-            attn_bias.to(query.dtype)
-
-        if attn_mask is not None:
-            if attn_mask.dtype == torch.bool:
-                attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
-            else:
-                attn_bias += attn_mask
-
-        if enable_gqa:
-            key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
-            value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
-
-        # monitoring for multi-head attention with n heads
-        if S == L and query.size(-3) == key.size(-3) and query.size(-1) == value.size(-1):
-            n_head = query.size(-3)
-            for i_head in range(n_head):
-                q = query[..., i_head, :, :]        # [B, S, D]
-                k = key[..., i_head, :, :]
-                v = value[..., i_head, :, :]
-                if activation is not None:
-                    o = activation[..., i_head, :, :]
-
-                self.monitor_activations(f"{module_name}.head_{i_head}.query", q, is_reference=is_reference)
-                self.monitor_activations(f"{module_name}.head_{i_head}.key", k, is_reference=is_reference)
-                self.monitor_activations(f"{module_name}.head_{i_head}.value", v, is_reference=is_reference)
-                if activation is not None:
-                    self.monitor_activations(f"{module_name}.head_{i_head}.activation", o, is_reference=is_reference)
-        else:
-            if self.verbose:
-                print("Warning: monitor_scaled_dot_product_attention assumes that S == L and that the key query and value tensor have the same dimension.")
-
-        attn_weight = query @ key.transpose(-2, -1) * scale_factor
-        attn_weight += attn_bias
-        attn_weight = torch.softmax(attn_weight, dim=-1)
-        attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
-
-        # monitor entropy of the attention weights
-        if S == L and query.size(-3) == key.size(-3) and query.size(-1) == value.size(-1):
-            n_head = query.size(-3)
-            for i_head in range(n_head):
-                w = attn_weight[..., i_head, :, :]
-                entropy = -torch.sum(w * torch.log(w + 1e-8), dim=-1)
-                self.monitor_tensor(f"{module_name}.head_{i_head}.attention_entropy", entropy)
-
-                if self.verbose:
-                    print("Info: Monitored attention entropy for head ", module_name, " with shape ", entropy.shape)
-        # return attn_weight @ value [This is provided in the activation argument]
-
-
-    #################################################################
-    # Logging of gradients
-    #################################################################
-    def monitor_gradients(self, before_clip=False):
-        if not self.is_monitoring():
-            return
-        
-        for name, param in self.module.named_parameters():
-            if param.grad is None:
-                if self.verbose:
-                    print("Warning: Found a parameter where the gradient is None:", name)
-                continue
-
-            # log the different metrics (most likely the frobenius norm of the gradients)
-            for metric_name, metric_fn in self.gradient_metrics.items():
-                # we apply the metrics to the flattened gradient tensor
-                result = metric_fn(param.grad.detach().flatten())
-
-                # if result is a tensor, apply item()
-                if isinstance(result, torch.Tensor):
-                    result = result.item()
-
-                # Create log entry
-                log_entry = f"{format_module_name(name)}.gradient.{metric_name}"
-                if before_clip:
-                    log_entry += ".before_clip"
-
-                self.monitor_scalar(log_entry, result)
-
-                if self.verbose:
-                    print("Info: Parameter ", name, " has gradient of shape ", param.grad.shape, " with ", metric_name, " ", result, "(logged as ", log_entry, ")")
-
-
-    #################################################################
-    # Logging of parameters
-    #################################################################
-    def monitor_parameters(self):
-        if not self.is_monitoring():
-            return
-        
-        for name, param in self.module.named_parameters():
-
-            # log the different metrics (most likely the frobenius norm of the parameters)
-            for metric_name, metric_fn in self.parameter_metrics.items():
-                # we apply the metrics to the flattened parameter tensor
-                result = metric_fn(param.flatten())
-
-                # if result is a tensor, apply item()
-                if isinstance(result, torch.Tensor):
-                    result = result.item()
-
-                # Create log entry
-                log_entry = f"{format_module_name(name)}.{metric_name}"
-                self.monitor_scalar(log_entry, result)
-
-                if self.verbose:
-                    print("Info: Parameter ", name, " has shape ", param.shape, " with ", metric_name, " ", result, "(logged as ", log_entry, ")")
-                    
-            # the difference in l2 norm to the reference module
-            if self.reference_module is not None:
-                key = format_module_name(name)
-                ref_param = self.reference_module_parameters[key]
-                log_entry = f"{format_module_name(name)}.diff.l2norm"
-                diff = (param - ref_param).norm(p='fro').item()
-                self.monitor_scalar(log_entry, diff)
     
 
     #################################################################

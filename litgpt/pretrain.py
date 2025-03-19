@@ -51,7 +51,7 @@ from litgpt.utils import (
     save_hyperparameters,
 )
 
-from litgpt.monitor import TrainingMonitor
+from litgpt.monitor import ModuleMonitor
 from litgpt.mup import has_mup_enabled, instantiate_torch_mup_optimizer
 
 
@@ -81,7 +81,7 @@ def setup(
     tokenizer_dir: Optional[Path] = None,
     logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
-    training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training
+    training_monitor :ModuleMonitor = None , # added for the project. we montior activations, gradients and parameters during training
     with_reference_model: bool = True,         # whether the pre-training script should do forward passes with the reference model (i.e. the model at time step zero)  
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
@@ -213,7 +213,7 @@ def main(
     train: TrainArgs,
     eval: EvalArgs,
     optimizer: Union[str, Dict],
-    training_monitor :TrainingMonitor = None,
+    training_monitor :ModuleMonitor = None,
     with_reference_model: bool = True,
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
@@ -362,7 +362,7 @@ def fit(
     tokenizer_dir: Optional[Path],
     train: TrainArgs,
     eval: EvalArgs,
-    training_monitor :TrainingMonitor = None,
+    training_monitor :ModuleMonitor = None,
     reference_model: Optional[nn.Module] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -432,7 +432,7 @@ def fit(
         profiler = nullcontext()
 
     # mointoring of the first step
-    training_monitor.set_step(state["step_count"]+1)
+    training_monitor.start_step(state["step_count"]+1)
 
     resume_data_iteration = False
     if state["iter_num"] > 0:
@@ -487,11 +487,11 @@ def fit(
             fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
         running_loss.update(loss.detach())
-        training_monitor.clear_reference_activations()
+        training_monitor._clear_reference_activations()
         training_monitor.set_verbose(False)
 
         if not is_accumulating:
-            training_monitor.after_forward() # the forward passes are over, gather activation statistics
+            training_monitor._aggregate_activation_statistics() # the forward passes are over, gather activation statistics
 
             if fabric.world_size > 1 and fabric.global_rank == 0 and training_monitor.is_monitoring(): # FSDP requires parameter and gradient gathering for monitoring (rank0 only)
                 if reference_model is not None:
@@ -587,7 +587,7 @@ def fit(
 
         # advance the training monitor to the gradient next step
         if not is_accumulating:
-            training_monitor.set_step(state["step_count"]+1)
+            training_monitor.start_step(state["step_count"]+1)
 
     if use_pytorch_profiler:
         profiler.stop()
