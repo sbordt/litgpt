@@ -495,7 +495,7 @@ def fit(
 
                     logits = model(local_input_ids)
                     loss = chunked_cross_entropy(logits, local_targets)
-                    fabric.backward(loss / train.gradient_accumulation_iters(devices) * 2)  
+                    fabric.backward(loss / train.gradient_accumulation_iters(devices))  
 
                 if loss_sum is None:
                     loss_sum = loss.detach()
