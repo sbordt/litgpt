@@ -62,6 +62,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
     parser.add_argument("--advanced_activation_differences", action="store_true", default=False)
     parser.add_argument("--monitor_interval", type=int, default=100)
+    parser.add_argument("--verbose_monitor", action="store_true", default=False)
     # parameters of the pre-training run
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
     parser.add_argument("--width", type=int, default=128, help="width scaling")
@@ -154,11 +155,11 @@ if __name__ == "__main__":
     # create the training monitor
     training_monitor = TrainingMonitor(monitor_interval=args.monitor_interval, 
                                        monitor=args.monitor,
+                                       verbose=args.verbose_monitor,
                                        activation_metrics=activation_metrics,
                                        parameter_metrics=parameter_metrics,
                                        gradient_metrics=gradient_metrics,
                                        activation_difference_metrics=activation_difference_metrics)
-    training_monitor.set_verbose(True)
 
     # setup training from scratch with the given configuration
     setup(None, 

@@ -115,6 +115,7 @@ class TrainingMonitor:
                  monitor_interval = 20,
                  step_start = 0,
                  monitor = True,
+                 verbose = False,
                  activation_metrics=None,
                  parameter_metrics=None,
                  gradient_metrics=None,
@@ -132,7 +133,7 @@ class TrainingMonitor:
         self.reference_module_parameters = {}   # a mapping from parameter names to the parameters
         self.reference_module_activations = {}  # a mapping from module names to their activations
 
-        self.verbose = False
+        self.verbose = verbose
         self.monitor_interval = monitor_interval
         self.step = step_start
         self.monitor = monitor

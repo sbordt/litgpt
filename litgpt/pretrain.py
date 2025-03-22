@@ -475,11 +475,6 @@ def fit(
 
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
 
-        # monitor the first forward pass in detail
-        training_monitor.set_verbose(False)
-        if state["iter_num"] == 1:
-            training_monitor.set_verbose(True)
-
         # monitored forward pass with a reference model. we divide the batch into two parts to avoid GPU OOM
         if training_monitor.is_monitoring() and reference_model is not None and train.micro_batch_size > 1:
             input_ids_first_one = input_ids[:train.micro_batch_size//2]
