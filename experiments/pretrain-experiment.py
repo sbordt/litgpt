@@ -58,7 +58,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--timestamp", type=str, default=None)
     parser.add_argument("--use-pytorch-profiler", action="store_true", default=False)
-    parser.add_argument("--resume", action="store_true", default=False, description="resume training from a the most recent checkpoint. assumes that a checkpoint exist.")
+    parser.add_argument("--resume", action="store_true", default=False, dest="resume training from a the most recent checkpoint. assumes that a checkpoint exist.")
 
     # the actual pre-training parameters
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
