@@ -256,7 +256,7 @@ def main(
     training_monitor.set_module(model)
     training_monitor.set_reference_module(reference_model)
 
-    if reference_model and with_advanced_activation_differences:
+    if with_reference_model and with_advanced_activation_differences:
         if fabric.world_size != 1:
             raise ValueError("Advanced activation difference monitoring is only supported for single-GPU training")
         training_monitor.monitor_activation_differences(reference_model)
@@ -480,20 +480,42 @@ def fit(
         if state["iter_num"] == 1:
             training_monitor.set_verbose(True)
 
-        with fabric.no_backward_sync(model, enabled=is_accumulating):
-            # if we are monitoring the training step, we need to perform a forward pass with the reference model
-            # currently, we assume that all tensors and models are on the same device
-            if training_monitor.is_monitoring() and reference_model is not None:
-                with torch.no_grad():
-                    _ = reference_model(input_ids)
+        # monitored forward pass with a reference model. we divide the batch into two parts to avoid GPU OOM
+        if training_monitor.is_monitoring() and reference_model is not None and train.micro_batch_size > 1:
+            input_ids_first_one = input_ids[:train.micro_batch_size//2]
+            input_ids_second_one = input_ids[train.micro_batch_size//2:]
+            targets_first_one = targets[:train.micro_batch_size//2]
+            targets_second_one = targets[train.micro_batch_size//2:]
+            
+            loss_sum = None
+            for local_input_ids, local_targets in [(input_ids_first_one, targets_first_one), (input_ids_second_one, targets_second_one)]:
+                with fabric.no_backward_sync(model, enabled=is_accumulating):                                      
+                    with torch.no_grad():   
+                        _ = reference_model(local_input_ids)     
 
-            # (micro-) batch
-            logits = model(input_ids)
-            loss = chunked_cross_entropy(logits, targets)
-            fabric.backward(loss / train.gradient_accumulation_iters(devices))
+                    logits = model(local_input_ids)
+                    loss = chunked_cross_entropy(logits, local_targets)
+                    fabric.backward(loss / train.gradient_accumulation_iters(devices) * 2)  
 
-        running_loss.update(loss.detach())
-        training_monitor.clear_reference_activations()
+                if loss_sum is None:
+                    loss_sum = loss.detach()
+                else:
+                    loss_sum += loss.detach()
+
+                training_monitor.clear_reference_activations()                                                                    
+            running_loss.update(loss_sum)
+
+        # normal forward pass
+        else:                                                                            
+            with fabric.no_backward_sync(model, enabled=is_accumulating):
+                # (micro-) batch
+                logits = model(input_ids)
+                loss = chunked_cross_entropy(logits, targets)
+                fabric.backward(loss / train.gradient_accumulation_iters(devices))
+
+            running_loss.update(loss.detach())
+            training_monitor.clear_reference_activations()
+        
         training_monitor.set_verbose(False)
 
         if not is_accumulating:
