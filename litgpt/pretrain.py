@@ -256,14 +256,13 @@ def main(
     if fabric.world_size == 1 and reference_model is not None:     # if we are training on a single gpu, monitor intermediate activation differences
         training_monitor.monitor_activation_differences(reference_model)
 
-    # torch.compile the models
+    # torch.compile the model and setup for distributed training
+    uncompiled_model = model
     if with_compile:
         model = torch.compile(model)
     model = fabric.setup(model)
 
     if reference_model is not None:
-        if with_compile:
-            reference_model = torch.compile(reference_model)
         reference_model = fabric.setup(reference_model)
 
     # lightning performs re-initialization of model weights with FSDP.
@@ -339,8 +338,9 @@ def main(
         tokenizer_dir, 
         train, 
         eval,
-        training_monitor, 
+        training_monitor,
         reference_model,
+        uncompiled_model,
         get_lr_fn,
         use_pytorch_profiler)
 
@@ -376,6 +376,7 @@ def fit(
     eval: EvalArgs,
     training_monitor :TrainingMonitor = None,
     reference_model: Optional[nn.Module] = None,
+    uncompiled_model: Optional[nn.Module] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
 ) -> None:
@@ -484,8 +485,12 @@ def fit(
                 with torch.no_grad():
                     _ = reference_model(input_ids)
 
-            # (micro-) batch for the model
-            logits = model(input_ids)
+            # (micro-) batch
+            if training_monitor.is_monitoring():
+                logits = uncompiled_model(input_ids)
+            else:
+                logits = model(input_ids)
+
             loss = chunked_cross_entropy(logits, targets)
             fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
