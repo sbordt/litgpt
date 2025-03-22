@@ -217,6 +217,7 @@ def main(
     optimizer: Union[str, Dict],
     training_monitor :TrainingMonitor = None,
     with_reference_model: bool = True,
+    with_advanced_activation_differences = False,
     with_compile: bool = True,
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
@@ -253,7 +254,9 @@ def main(
     training_monitor.set_module(model)
     training_monitor.set_reference_module(reference_model)
 
-    if fabric.world_size == 1 and reference_model is not None:     # if we are training on a single gpu, monitor intermediate activation differences
+    if reference_model and with_advanced_activation_differences:
+        if fabric.world_size != 1:
+            raise ValueError("Advanced activation difference monitoring is only supported for single-GPU training")
         training_monitor.monitor_activation_differences(reference_model)
 
     # torch.compile the model and setup for distributed training

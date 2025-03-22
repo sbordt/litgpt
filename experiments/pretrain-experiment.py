@@ -60,6 +60,7 @@ if __name__ == "__main__":
                     help="disable comparison of activations to the reference model")
     parser.add_argument("--monitor", action="store_true", default=True)
     parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
+    parser.add_argument("--advanced_activation_differences", action="store_true", default=False)
     parser.add_argument("--monitor_interval", type=int, default=100)
     # parameters of the pre-training run
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
@@ -196,6 +197,7 @@ if __name__ == "__main__":
         seed = args.seed,
         training_monitor = training_monitor,
         with_reference_model = args.reference_model,
+        with_advanced_activation_differences = args.advanced_activation_differences,
         with_compile = args.compile,
         use_pytorch_profiler = args.use_pytorch_profiler,
         initialize_weights_fn = initialize_weights_fn,
