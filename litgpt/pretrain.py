@@ -147,13 +147,13 @@ def setup(
     tokenizer = Tokenizer(tokenizer_dir) if tokenizer_dir is not None else None
 
     # check if "project" is in logger_kwargs and pass it as "name" to choose_logger
-    logger_project_name = f"pretrain-{config.name}"
+    project = f"pretrain-{config.name}"
     if logger_kwargs and "project" in logger_kwargs:
-        logger_project_name = logger_kwargs["project"]
+        project = logger_kwargs["project"]
         del logger_kwargs["project"]
         
     logger = choose_logger(
-        logger_name, out_dir, name=logger_project_name, resume=False, log_interval=train.log_interval, entity="mup_limitations", **(logger_kwargs or {})  # need to check how to setup wandb resuming
+        logger_name, out_dir, project=project, resume=False, log_interval=train.log_interval, entity="mup_limitations", **(logger_kwargs or {})  # need to check how to setup wandb resuming
     )
 
     if devices * num_nodes > 1:
