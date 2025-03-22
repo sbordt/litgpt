@@ -111,7 +111,7 @@ if __name__ == "__main__":
             raise ValueError(f"Directory {experiment_dir} does not exist, cannot resume training")
     else:
         if SLURM_PROCID == 0: # otherwise rank0 creates the directory
-            os.makedirs(experiment_dir, exist_ok=False)
+            os.makedirs(run_dir, exist_ok=False)
 
     # create the model config with appropriate width scaling
     model_config = Config.from_name(args.model)
