@@ -83,6 +83,7 @@ def setup(
     seed: int = 42,
     training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training
     with_reference_model: bool = True,         # whether the pre-training script should do forward passes with the reference model (i.e. the model at time step zero)  
+    with_compile: bool = True,                # whether to compile the model
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -193,6 +194,7 @@ def setup(
         optimizer,
         training_monitor,
         with_reference_model,
+        with_compile,
         initialize_weights_fn,
         get_lr_fn,
         use_pytorch_profiler,
@@ -215,6 +217,7 @@ def main(
     optimizer: Union[str, Dict],
     training_monitor :TrainingMonitor = None,
     with_reference_model: bool = True,
+    with_compile: bool = True,
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -246,11 +249,21 @@ def main(
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters: {num_parameters(model):,}")
 
-    model = torch.compile(model)
+    # register hooks to monitor the training process (according to torch.compile docs, this should happen before compilation)
+    training_monitor.set_module(model)
+    training_monitor.set_reference_module(reference_model)
+
+    if fabric.world_size == 1 and reference_model is not None:     # if we are training on a single gpu, monitor intermediate activation differences
+        training_monitor.monitor_activation_differences(reference_model)
+
+    # torch.compile the models
+    if with_compile:
+        model = torch.compile(model)
     model = fabric.setup(model)
 
     if reference_model is not None:
-        # reference_model = torch.compile(reference_model)
+        if with_compile:
+            reference_model = torch.compile(reference_model)
         reference_model = fabric.setup(reference_model)
 
     # lightning performs re-initialization of model weights with FSDP.
@@ -406,14 +419,6 @@ def fit(
 
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
-    # monitor the training
-    training_monitor.set_module(model)
-    training_monitor.set_reference_module(reference_model)
-
-    # if we are training on a single gpu, monitor intermediate activation differences
-    #if fabric.world_size == 1 and reference_model is not None:
-    #    training_monitor.monitor_activation_differences(reference_model)
-
     # profile the training with the pytorch profiler (optional)
     if use_pytorch_profiler:
         profiler = profile(
@@ -430,7 +435,6 @@ def fit(
     else:
         profiler = nullcontext()
 
-    # mointoring of the first step
     training_monitor.set_step(state["step_count"]+1)
 
     resume_data_iteration = False
