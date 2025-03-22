@@ -19,7 +19,9 @@ from project_utils import count_model_parameters, print_config_wrt_scaling
 from DclmData import DclmData
 
 import math
+
 import torch
+torch.set_float32_matmul_precision('high')  
 
 
 # learning rate decay scheduler (cosine with linear warmup)
@@ -54,15 +56,15 @@ if __name__ == "__main__":
     parser.add_argument("--timestamp", type=str, default=None)
     parser.add_argument("--resume", action="store_true", default=False, help="resume training from the most recent checkpoint. the checkpoint needs to exist.")
     # monitoring parameters
+    parser.add_argument("--monitor", action="store_true", default=True)
+    parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
+    parser.add_argument("--monitor_interval", type=int, default=100)
+    parser.add_argument("--verbose_monitor", action="store_true", default=False)
     parser.add_argument("--reference-model", action="store_true", default=True, 
                     help="compare activations to the reference model at initialization")
     parser.add_argument("--no-reference-model", action="store_false", dest="reference_model",
                     help="disable comparison of activations to the reference model")
-    parser.add_argument("--monitor", action="store_true", default=True)
-    parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
     parser.add_argument("--advanced_activation_differences", action="store_true", default=False)
-    parser.add_argument("--monitor_interval", type=int, default=100)
-    parser.add_argument("--verbose_monitor", action="store_true", default=False)
     # parameters of the pre-training run
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
     parser.add_argument("--width", type=int, default=128, help="width scaling")

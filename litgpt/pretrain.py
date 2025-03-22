@@ -4,7 +4,8 @@
 # we take this default litgpt pre-trainign script and modify it to monitor the training process of the model
 #
 import torch._dynamo
-torch._dynamo.config.suppress_errors = True # when resuming from checkpoint, fall back to eager.
+torch._dynamo.config.suppress_errors = True  # when resuming from checkpoint, fall back to eager.
+torch._dynamo.config.cache_size_limit = 25   # allow to monitor the first 20 steps with a compiled model
 
 import math
 import pprint
