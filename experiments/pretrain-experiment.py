@@ -200,7 +200,8 @@ if __name__ == "__main__":
         use_pytorch_profiler = args.use_pytorch_profiler,
         initialize_weights_fn = initialize_weights_fn,
         logger_kwargs = {
-            "name": experiment_name,
+            "name": run_name,
+            "project": experiment_name,
         },
         get_lr_fn = get_lr,
     )
