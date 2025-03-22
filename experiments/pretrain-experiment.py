@@ -50,8 +50,9 @@ if __name__ == "__main__":
     parser.add_argument("--experiment_name", type=str, default=None, help="name of the experiment (required)")
     parser.add_argument("--output_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/moritz_sebastian_2025/")
     parser.add_argument("--data_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/dclm-baseline-1.0-tokenized-preview")
+    # parser.add_argument("--tokenizer_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/checkpoints/EleutherAI/pythia-14m")
     parser.add_argument("--timestamp", type=str, default=None)
-    parser.add_argument("--resume", action="store_true", default=False, help="resume training from the most recent checkpoint. assumes that a checkpoint exists.")
+    parser.add_argument("--resume", action="store_true", default=False, help="resume training from the most recent checkpoint. the checkpoint needs to exist.")
     # monitoring parameters
     parser.add_argument("--reference-model", action="store_true", default=True, 
                     help="compare activations to the reference model at initialization")
@@ -164,7 +165,8 @@ if __name__ == "__main__":
           out_dir=run_dir,
         precision=args.precision, 
         data = data,
-        tokenizer_dir=Path("EleutherAI/pythia-14m"),
+        tokenizer_dir=None,
+        resume=args.resume,
         train = TrainArgs(
             save_interval=1000,
             log_interval=1,
