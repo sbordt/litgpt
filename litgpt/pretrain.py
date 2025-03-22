@@ -257,7 +257,6 @@ def main(
         training_monitor.monitor_activation_differences(reference_model)
 
     # torch.compile the model and setup for distributed training
-    uncompiled_model = model
     if with_compile:
         model = torch.compile(model)
     model = fabric.setup(model)
@@ -307,7 +306,7 @@ def main(
     fabric.print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
     fabric.print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 
-    # THIS IS THE ORIGINAL LITGPT RESUME TRAINING CODE THAT WE ARE NOT USING BECAUSE IT ALLOCATES EXCESS MEMORY
+    # THIS IS THE ORIGINAL LITGPT RESUME TRAINING CODE THAT WE ARE NOT USING (because it somehow failed for us)
     #resume = find_resume_path(resume, out_dir)
     #if resume:
     #    fabric.print(f"Resuming training from {resume}")
@@ -340,7 +339,6 @@ def main(
         eval,
         training_monitor,
         reference_model,
-        uncompiled_model,
         get_lr_fn,
         use_pytorch_profiler)
 
@@ -376,7 +374,6 @@ def fit(
     eval: EvalArgs,
     training_monitor :TrainingMonitor = None,
     reference_model: Optional[nn.Module] = None,
-    uncompiled_model: Optional[nn.Module] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
 ) -> None:
@@ -486,11 +483,7 @@ def fit(
                     _ = reference_model(input_ids)
 
             # (micro-) batch
-            if training_monitor.is_monitoring():
-                logits = uncompiled_model(input_ids)
-            else:
-                logits = model(input_ids)
-
+            logits = model(input_ids)
             loss = chunked_cross_entropy(logits, targets)
             fabric.backward(loss / train.gradient_accumulation_iters(devices))
 

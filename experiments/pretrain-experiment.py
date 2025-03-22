@@ -79,7 +79,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     # pytorch options
     parser.add_argument("--use-pytorch-profiler", action="store_true", default=False)
-    parser.add_argument("--compile", action="store_true", default=True, 
+    parser.add_argument("--compile", action="store_true", default=False, 
                     help="enable model compilation with torch.compile")
     parser.add_argument("--no-compile", action="store_false", dest="compile",
                     help="disable model compilation with torch.compile")
