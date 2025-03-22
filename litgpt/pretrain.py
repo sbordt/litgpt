@@ -5,7 +5,7 @@
 #
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True  # when resuming from checkpoint, fall back to eager.
-torch._dynamo.config.cache_size_limit = 25   # allow to monitor the first 20 steps with a compiled model
+torch._dynamo.config.cache_size_limit = 25   # allow to monitor up to 25 steps with a compiled model withoug falling back to eager
 
 import math
 import pprint
