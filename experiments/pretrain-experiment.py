@@ -45,22 +45,22 @@ if __name__ == "__main__":
     # argparse
     parser = argparse.ArgumentParser()
 
-    # arguments for experiment setup, logging and filesystem
+    # experiment name, logging and filesystem
     parser.add_argument("--run_name", type=str, default=None, help="run name (not required)")
-    parser.add_argument("--experiment_name", type=str, default=None, help="experiment-torch-compile-and-hooks")
+    parser.add_argument("--experiment_name", type=str, default=None, help="name of the experiment (required)")
     parser.add_argument("--output_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/moritz_sebastian_2025/")
     parser.add_argument("--data_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/dclm-baseline-1.0-tokenized-preview")
-    parser.add_argument("--monitor", action="store_true", default=True)
-    parser.add_argument("--no-monitoring", action="store_false", dest="global toggle to turn off all monitoring")
-    parser.add_argument("--no_reference", action="store_false", default=True, dest="whether to compare the activations to the reference model at initialization")
-    parser.add_argument("--monitor_interval", type=int, default=100)
-    parser.add_argument("--data_seed", type=int, default=42)
-    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--timestamp", type=str, default=None)
-    parser.add_argument("--use-pytorch-profiler", action="store_true", default=False)
-    parser.add_argument("--resume", action="store_true", default=False, dest="resume training from a the most recent checkpoint. assumes that a checkpoint exist.")
-
-    # the actual pre-training parameters
+    parser.add_argument("--resume", action="store_true", default=False, help="resume training from the most recent checkpoint. assumes that a checkpoint exists.")
+    # monitoring parameters
+    parser.add_argument("--reference-model", action="store_true", default=True, 
+                    help="compare activations to the reference model at initialization")
+    parser.add_argument("--no-reference-model", action="store_false", dest="reference_model",
+                    help="disable comparison of activations to the reference model")
+    parser.add_argument("--monitor", action="store_true", default=True)
+    parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
+    parser.add_argument("--monitor_interval", type=int, default=100)
+    # parameters of the pre-training run
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
     parser.add_argument("--width", type=int, default=128, help="width scaling")
     parser.add_argument("--max_tokens", type=int, default=6400000000) # 6.4B is 2x Chinchilla for 160m model
@@ -74,7 +74,14 @@ if __name__ == "__main__":
     parser.add_argument("--mup_output_alpha", type=float, default=1)
     parser.add_argument("--precision", type=str, default="32-true")
     parser.add_argument("--tie_embeddings", action="store_true", default=False)
-    parser.add_argument("--no-compile", action="store_false", default=True)
+    parser.add_argument("--data_seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=42)
+    # pytorch options
+    parser.add_argument("--use-pytorch-profiler", action="store_true", default=False)
+    parser.add_argument("--compile", action="store_true", default=True, 
+                    help="enable model compilation with torch.compile")
+    parser.add_argument("--no-compile", action="store_false", dest="compile",
+                    help="disable model compilation with torch.compile")
     args = parser.parse_args()
 
     SLURM_PROCID = int(os.environ.get('SLURM_PROCID', 0)) # Get SLURM process ID (equivalent to rank in distributed training)
@@ -186,10 +193,13 @@ if __name__ == "__main__":
         logger_name = "wandb",
         seed = args.seed,
         training_monitor = training_monitor,
-        with_reference_model = not args.no_reference,
-        with_compile = args.no_compile,
+        with_reference_model = args.reference_model,
+        with_compile = args.compile,
         use_pytorch_profiler = args.use_pytorch_profiler,
         initialize_weights_fn = initialize_weights_fn,
+        logger_kwargs = {
+            "name": experiment_name,
+        },
         get_lr_fn = get_lr,
     )
 
