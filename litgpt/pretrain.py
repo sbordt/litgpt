@@ -82,7 +82,8 @@ def setup(
     logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
     training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training
-    with_reference_model: bool = True,         # whether the pre-training script should do forward passes with the reference model (i.e. the model at time step zero)  
+    with_reference_model: bool = True,         # whether the pre-training script should do forward passes with the reference model (i.e. the model at time step zero)
+    with_advanced_activation_differences: bool = False, # whether to perform forward passes with the reference model using the intermediate activations of the main module
     with_compile: bool = True,                # whether to compile the model
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
@@ -194,6 +195,7 @@ def setup(
         optimizer,
         training_monitor,
         with_reference_model,
+        with_advanced_activation_differences,
         with_compile,
         initialize_weights_fn,
         get_lr_fn,
