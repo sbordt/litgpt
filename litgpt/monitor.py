@@ -300,6 +300,14 @@ class ModuleMonitor:
     def get_all_metrics(self):
         """Return the full log dict with all steps that have been logged so far."""
         return self.log_dict
+    
+
+    def load_metrics(self, log_dict):
+        """Load a log dict."""
+        # assert that the current log dict is empty
+        if len(self.log_dict) > 0:
+            raise ValueError("The current log dict is not empty. Please clear it first.")
+        self.log_dict = log_dict
 
 
     #################################################################

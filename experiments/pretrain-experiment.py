@@ -121,6 +121,7 @@ if __name__ == "__main__":
     else:
         if SLURM_PROCID == 0: # otherwise rank0 creates the directory
             os.makedirs(run_dir, exist_ok=False)
+    logging.info(f"Run directory: {run_dir}")
 
     # create the model config with appropriate width scaling
     model_config = Config.from_name(args.model)
@@ -166,6 +167,7 @@ if __name__ == "__main__":
                                        parameter_metrics=parameter_metrics,
                                        gradient_metrics=gradient_metrics,
                                        activation_difference_metrics=activation_difference_metrics)
+
 
     # setup training from scratch with the given configuration
     setup(None, 
@@ -215,17 +217,12 @@ if __name__ == "__main__":
         get_lr_fn = get_lr,
     )
 
-    # pickle the log dicts of inidividual ranks
-    if WORLD_SIZE > 1:
-        with open(os.path.join(run_dir, f"log_dict_rank{SLURM_PROCID}.pkl"), "wb") as f:
-            pkl.dump(training_monitor.get_all_metrics(), f)
-
     # rank0 merges the log dicts from all other ranks
     if WORLD_SIZE > 1 and SLURM_PROCID == 0:
         time.sleep(300) # give all ranks the time to pickle their log dicts
         log_dicts = []
         for i in range(1, WORLD_SIZE):
-            with open(os.path.join(run_dir, f"log_dict_rank{i}.pkl"), "rb") as f:
+            with open(os.path.join(run_dir, f"final/log_dict_rank{i}.pkl"), "rb") as f:
                 log_dicts.append(pkl.load(f))
         training_monitor.merge_log_dicts(log_dicts)
     
@@ -233,10 +230,5 @@ if __name__ == "__main__":
     training_monitor.save_hdf5(os.path.join(run_dir, "log_dict.hdf5"))
     with open(os.path.join(run_dir, "log_dict.pkl"), "wb") as f:
         pkl.dump(training_monitor.get_all_metrics(), f)
-
-    # if this worked out, we can remove the individual log dicts
-    if WORLD_SIZE > 1 and SLURM_PROCID == 0:
-        for i in range(1, WORLD_SIZE):
-            os.remove(os.path.join(run_dir, f"log_dict_rank{i}.pkl"))
 
     logging.shutdown()
