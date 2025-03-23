@@ -541,6 +541,8 @@ def fit(
                         training_monitor.monitor_gradients()
             else:
                 training_monitor.monitor_gradients()
+
+            training_monitor.aggregate_step()
             
             optimizer.step()
             optimizer.zero_grad()
@@ -601,10 +603,7 @@ def fit(
             training_monitor.log_scalars(metrics) 
             fabric.log_dict(metrics, step=state["step_count"])
             fabric.barrier()
-
-        if not is_accumulating: 
-            training_monitor.aggregate_step()
-
+ 
         if (train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0) or (state["step_count"] == 0 and state["iter_num"] == 1):
             save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
 
