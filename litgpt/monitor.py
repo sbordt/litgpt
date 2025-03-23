@@ -6,6 +6,7 @@ from typing import Union, List
 from numbers import Number
 import logging
 import sys
+from contextlib import contextmanager
 
 
 def format_module_name(name: str):
@@ -185,7 +186,7 @@ class ModuleMonitor:
         for name, m in module.named_modules():
             self.module_names[m] = format_module_name(name)
             self.module_hooks[m] = m.register_forward_hook(self._get_activation_forwad_hook(self.module_names[m]))
-            self.logger.debug("Registered forward hook for module %s", name)
+            self.logger.debug(f"Step {self.step}: Registered forward hook for module %s", name)
             # if the module implements the MonitoredModule interface, set the training monitor
             if isinstance(m, MonitorMixin):
                 m.set_training_monitor(self, False)
@@ -274,6 +275,19 @@ class ModuleMonitor:
 
     def is_monitoring(self):
         return self.monitor_step
+    
+
+    @contextmanager
+    def no_monitoring(self):
+        """
+        Context manager to temporarily disable monitoring.
+        """
+        original_state = self.monitor_step
+        self.monitor_step = False
+        try:
+            yield
+        finally:
+            self.monitor_step = original_state
     
 
     def get_step_metrics(self):
@@ -384,11 +398,11 @@ class ModuleMonitor:
 
             # raise a warning if no reference module is set
             if not self.has_reference_module():
-                self.logger.warning("Attempted to monitor activations of the reference module, but no reference module is set (for module %s).", module_name)
+                self.logger.warning(f"Step {self.step}: Attempted to monitor activations of the reference module, but no reference module is set (for module %s).", module_name)
                 return
             # raise a warning if the reference module has already stored activations for this module
             if module_name in self.reference_module_activations:
-                self.logger.warning("Attempted to monitor activations of the reference module for module %s, but activations are already stored.", module_name)
+                self.logger.warning(f"Step {self.step}: Attempted to monitor activations of the reference module for module %s, but activations are already stored.", module_name)
                 return
             # store the activations
             self.reference_module_activations[module_name] = activations 
@@ -416,9 +430,9 @@ class ModuleMonitor:
                     log_entry = f"activation_difference/{module_name}/{metric_name}"
                     self.log_tensor(log_entry, result)
             else:
-                self.logger.warning("No reference module activations found for module %s", module_name)
+                self.logger.warning(f"Step {self.step}: No reference module activations found for module %s", module_name)
 
-        self.logger.debug("Monitored activations of module %s with shape %s", module_name, activations.shape)
+        self.logger.debug(f"Step {self.step}: Monitored activations of module %s with shape %s", module_name, activations.shape)
 
 
     def _get_activation_forwad_hook(self, module_name : str):
@@ -455,8 +469,7 @@ class ModuleMonitor:
                         self.log_dict[self.step][k + ".std"] = np.std(v)
 
             # print total number of keys
-            self.logger.info("Finished step %s. Monitored a total of %s keys.", self.step, len(self.log_dict[self.step]))
-            self.logger.info("Current size of log_dict in MB: %s", sys.getsizeof(self.log_dict) / 1024 / 1024)
+            self.logger.info(f"Step {self.step}: ModuleMonitor logged %s keys. Current size of log data: %i MB", self.step, len(self.log_dict[self.step]), sys.getsizeof(self.log_dict) / 1024 / 1024)
 
 
     #######################################################################################
@@ -521,7 +534,7 @@ class ModuleMonitor:
                 log_entry = f"advanced_activation_difference/{module_name}/{metric_name}"
                 self.log_tensor(log_entry, result)
 
-            self.logger.debug("Monitored advanced activation differences of module %s with shape %s", module_name, output.shape)
+            self.logger.debug(f"Step {self.step}: Monitored advanced activation differences of module %s with shape %s", module_name, output.shape)
 
         return hook
 
@@ -593,7 +606,7 @@ class ModuleMonitor:
                 if activation is not None:
                     self.monitor_activations(f"{module_name}.head_{i_head}.activation", o, is_reference=is_reference)
         else:
-            self.logger.warning("monitor_scaled_dot_product_attention assumes that S == L and that the key query and value tensor have the same dimension.")
+            self.logger.warning(f"Step {self.step}: monitor_scaled_dot_product_attention assumes that S == L and that the key query and value tensor have the same dimension.")
 
         attn_weight = query @ key.transpose(-2, -1) * scale_factor
         attn_weight += attn_bias
@@ -607,9 +620,9 @@ class ModuleMonitor:
                 w = attn_weight[..., i_head, :, :]
                 entropy = -torch.sum(w * torch.log(w + 1e-8), dim=-1)
                 self.log_tensor(f"attention_entropy/{module_name}.head_{i_head}", entropy)
-                self.logger.debug("Monitored attention entropy for head %s with shape %s", i_head, entropy.shape)
+                self.logger.debug(f"Step {self.step}: Monitored attention entropy for head %s with shape %s", i_head, entropy.shape)
 
-        self.logger.debug("Monitored scaled dot product attention for module %s with query shape %s, key shape %s, value shape %s", module_name, query.shape, key.shape, value.shape)
+        self.logger.debug(f"Step {self.step}: Monitored scaled dot product attention for module %s with query shape %s, key shape %s, value shape %s", module_name, query.shape, key.shape, value.shape)
         # return attn_weight @ value [This is provided in the activation argument]
 
 
@@ -622,7 +635,7 @@ class ModuleMonitor:
         
         for name, param in self.module.named_parameters():
             if param.grad is None:
-                self.logger.warning("Found a parameter where the gradient is None: %s", name)
+                self.logger.warning(f"Step {self.step}: Found a parameter where the gradient is None: %s", name)
                 continue
 
             # log the different metrics (most likely the frobenius norm of the gradients)
@@ -640,7 +653,7 @@ class ModuleMonitor:
                     log_entry = log_entry.replace("gradient/", "gradient_before_clip/", 1)
 
                 self.log_scalar(log_entry, result)
-                self.logger.debug("Monitored gradient of parameter %s with shape %s with %s %s (logged as %s)", name, param.grad.shape, metric_name, result, log_entry)
+                self.logger.debug(f"Step {self.step}: Monitored gradient of parameter %s with shape %s with %s %s (logged as %s)", name, param.grad.shape, metric_name, result, log_entry)
 
 
     #################################################################
@@ -664,7 +677,7 @@ class ModuleMonitor:
                 # Create log entry
                 log_entry = f"parameter/{format_module_name(name)}/{metric_name}"
                 self.log_scalar(log_entry, result)
-                self.logger.debug("Monitored parameter %s with shape %s with %s %s (logged as %s)", name, param.shape, metric_name, result, log_entry)
+                self.logger.debug(f"Step {self.step}: Monitored parameter %s with shape %s with %s %s (logged as %s)", name, param.shape, metric_name, result, log_entry)
 
             # the difference in l2 norm to the reference module
             if self.reference_module is not None:
@@ -768,7 +781,7 @@ class ModuleMonitor:
                     group.create_dataset('keys', data=keys)
                     group.create_dataset('values', data=values)
                 except Exception as e:
-                    self.logger.warning("Could not save parameter %s with keys %s and values %s: %s", parameter, keys, values, e)
+                    self.logger.warning(f"Step {self.step}: Could not save parameter %s with keys %s and values %s: %s", parameter, keys, values, e)
 
     
     @classmethod
@@ -837,7 +850,7 @@ class ModuleMonitor:
             module_name = self.reference_module_names[module]
         else:
             if not module in self.module_names:
-                self.logger.warning("Module %s not found in the module names dict.", module)
+                self.logger.warning(f"Step {self.step}: Module %s not found in the module names dict.", module)
                 return "[unknown module]"
             module_name = self.module_names[module]
         assert isinstance(module_name, str)

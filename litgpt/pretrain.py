@@ -513,8 +513,6 @@ def fit(
             training_monitor.clear_reference_activations()
 
         if not is_accumulating:
-            training_monitor.aggregate_step() # the forward passes are over, gather activation statistics
-
             if fabric.world_size > 1 and fabric.global_rank == 0 and training_monitor.is_monitoring(): # FSDP requires parameter and gradient gathering for monitoring (rank0 only)
                 if reference_model is not None:
                     with FullyShardedDataParallel.summon_full_params(model, with_grads=True): # gather both model and reference model parameters
@@ -591,18 +589,21 @@ def fit(
             metrics.update(training_monitor.get_step_metrics())
             fabric.log_dict(metrics, step=state["step_count"])
             
-
         if val_dataloader is not None and not is_accumulating and state["step_count"] % eval.interval == 0:
-            t0 = time.perf_counter()
-            val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
-            val_loss = val_loss.item()
-            td = time.perf_counter() - t0
+            with training_monitor.no_monitoring():
+                t0 = time.perf_counter()
+                val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
+                val_loss = val_loss.item()
+                td = time.perf_counter() - t0
 
             fabric.print(f"iter {state['iter_num']}: val loss {val_loss:.4f}, val time: {td * 1000:.2f} ms")
             metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
             training_monitor.log_scalars(metrics) 
             fabric.log_dict(metrics, step=state["step_count"])
             fabric.barrier()
+
+        if not is_accumulating: 
+            training_monitor.aggregate_step()
 
         if (train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0) or (state["step_count"] == 0 and state["iter_num"] == 1):
             save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
