@@ -560,6 +560,9 @@ class ModuleMonitor:
         """Monitor a scaled dot product attention operation. 
         Follows the signature of the pytorch function torch.nn.functional.scaled_dot_product_attention.
         """
+        if not self.is_monitoring():
+            return
+
         module_name = self._module_name(module, is_reference)
 
         # the monitoring here is VERY inefficient, as we have to recompute the attention weights
