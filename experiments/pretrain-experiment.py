@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
     # experiment name, logging and filesystem
     parser.add_argument("--run_name", type=str, default=None, help="run name (not required)")
-    parser.add_argument("--timestamp", type=str, default=None)
+    parser.add_argument("--run_id", type=str, default=None)
     parser.add_argument("--experiment_name", type=str, default=None, help="name of the experiment (required)")
     parser.add_argument("--output_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/moritz_sebastian_2025/")
     parser.add_argument("--data_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/dclm-baseline-1.0-tokenized-preview")
@@ -97,8 +97,8 @@ if __name__ == "__main__":
     WORLD_SIZE = int(os.environ.get('SLURM_NTASKS', 1)) # Get total number of tasks
     if args.experiment_name is None:
         raise ValueError("Experiment name must be provided")
-    if WORLD_SIZE > 1 and args.timestamp is None:
-        raise ValueError("Timestamp must be provided for multi-GPU training")
+    if WORLD_SIZE > 1 and args.run_id is None:
+        raise ValueError("Run-id must be provided for multi-GPU training")
     
     # setup a shared directory for all experiments with the same name
     experiment_name = args.experiment_name
@@ -110,14 +110,14 @@ if __name__ == "__main__":
     run_name = f"pretrain-{args.model}"
     if args.run_name is not None:
         run_name = args.run_name
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") # append the current timestamp (day, hour, minute, second) to the run name
-    if args.timestamp is not None:
-        timestamp = args.timestamp
-    run_name += f"-timestamp={timestamp}"
+    run_id = datetime.now().strftime("%Y%m%d%H%M%S") # use the current timestamp (day, hour, minute, second) as the run id
+    if args.run_id is not None:
+        run_id = args.run_id
+    run_name += f"-id={run_id}"
     run_dir = os.path.join(experiment_dir, run_name)
     if args.resume:
-        if not os.path.exists(experiment_dir):
-            raise ValueError(f"Directory {experiment_dir} does not exist, cannot resume training")
+        if not os.path.exists(run_dir):
+            raise ValueError(f"Run drectory {run_dir} does not exist, cannot resume training")
     else:
         if SLURM_PROCID == 0: # otherwise rank0 creates the directory
             os.makedirs(run_dir, exist_ok=False)

@@ -328,6 +328,9 @@ def main(
         train_dataloader
         state['iter_num'] = checkpoint['iter_num']
         state['step_count'] = checkpoint['step_count']
+        log_dict_path = resume.parent / f"log_dict_rank{fabric.global_rank}.pkl"
+        with open(log_dict_path, "rb") as f:
+            training_monitor.load_metrics(pickle.load(f))
         fabric.print(f"Resuming training from {resume}")
         del checkpoint
 
