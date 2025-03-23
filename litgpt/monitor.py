@@ -745,7 +745,7 @@ class ModuleMonitor:
                 # Create log entry
                 log_entry = f"gradient/{format_module_name(name)}/{metric_name}"
                 if before_clip:
-                    log_entry = log_entry.replace("gradient/", "gradient_before_clip/", count=1)
+                    log_entry = log_entry.replace("gradient/", "gradient_before_clip/", 1)
 
                 self.log_scalar(log_entry, result)
                 self.logger.debug("Monitored gradient of parameter %s with shape %s with %s %s (logged as %s)", name, param.grad.shape, metric_name, result, log_entry)
