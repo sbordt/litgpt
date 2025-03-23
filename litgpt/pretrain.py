@@ -55,6 +55,8 @@ from litgpt.utils import (
 from litgpt.monitor import ModuleMonitor
 from litgpt.mup import has_mup_enabled, instantiate_torch_mup_optimizer
 
+import pickle
+
 
 def setup(
     model_name: str,
@@ -350,6 +352,10 @@ def main(
 
     # Save final checkpoint
     save_checkpoint(fabric, state, tokenizer_dir, out_dir / "final" / "lit_model.pth")
+    
+    # save final log_dict
+    with open(out_dir / "final" / f"log_dict_rank{fabric.global_rank}.pkl", "wb") as f:
+        pickle.dump(training_monitor.get_all_metrics(), f)
 
     total_tokens = state["iter_num"] * train.micro_batch_size * model.max_seq_length * fabric.world_size
 
@@ -605,7 +611,12 @@ def fit(
             fabric.barrier()
  
         if (train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0) or (state["step_count"] == 0 and state["iter_num"] == 1):
-            save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
+            checkpoint_dir = out_dir / f"step-{state['step_count']:08d}" 
+            save_checkpoint(fabric, state, tokenizer_dir, checkpoint_dir / "lit_model.pth")
+
+            # save the current log_dict in the same directory as the checkpoint
+            with open(checkpoint_dir / f"log_dict_rank{fabric.global_rank}.pkl", "wb") as f:
+                pickle.dump(training_monitor.get_all_metrics(), f)
 
         # advance the training monitor to the gradient next step
         if not is_accumulating:

@@ -51,11 +51,11 @@ if __name__ == "__main__":
 
     # experiment name, logging and filesystem
     parser.add_argument("--run_name", type=str, default=None, help="run name (not required)")
+    parser.add_argument("--timestamp", type=str, default=None)
     parser.add_argument("--experiment_name", type=str, default=None, help="name of the experiment (required)")
     parser.add_argument("--output_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/moritz_sebastian_2025/")
     parser.add_argument("--data_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/dclm-baseline-1.0-tokenized-preview")
-    # parser.add_argument("--tokenizer_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/checkpoints/EleutherAI/pythia-14m")
-    parser.add_argument("--timestamp", type=str, default=None)
+    parser.add_argument("--save_interval", type=int, default=1000)
     parser.add_argument("--resume", action="store_true", default=False, help="resume training from the most recent checkpoint. the checkpoint needs to exist.")
     parser.add_argument("--log-level", type=str, default="INFO", help="logging level")
     # monitoring parameters
@@ -176,7 +176,7 @@ if __name__ == "__main__":
         tokenizer_dir=None,
         resume=args.resume,
         train = TrainArgs(
-            save_interval=1000,
+            save_interval=args.save_interval,
             log_interval=1,
             global_batch_size=args.global_batch_size,
             micro_batch_size=args.micro_batch_size,

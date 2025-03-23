@@ -336,7 +336,7 @@ class ModuleMonitor:
             self.log_dict[self.step][key] = value
 
 
-    def log_tensor(self, key: str, tensor: torch.Tensor, force=False):
+    def log_tensor(self, key: str, tensor: torch.Tensor):
         """Monitor a torch.Tensor.
 
         Tensors are stored in a list and aggregated by after_forward.
@@ -346,11 +346,8 @@ class ModuleMonitor:
             tensor (torch.Tensor): The tensor to monitor.
             force (bool): Whether to log even if not monitoring the current step.
         """
-        if not self.is_monitoring() and not force:
+        if not self.is_monitoring():
             return
-        
-        if force and self.step not in self.log_dict:
-            self.log_dict[self.step] = {}
 
         # detach and flatten the tensor
         tensor = tensor.detach().flatten()
@@ -471,7 +468,7 @@ class ModuleMonitor:
             # print total number of keys
             size_mb = sys.getsizeof(self.log_dict) / 1024 / 1024
             self.logger.info(
-                f"Step {self.step}: ModuleMonitor logged {len(self.log_dict[self.step])} keys. Current size of log data: {size_mb:.2f} MB"
+                f"Logged {len(self.log_dict[self.step])} keys at step {self.step}. Total size of log data: {size_mb:.2f} MB"
             )
 
     #######################################################################################
