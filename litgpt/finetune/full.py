@@ -94,7 +94,7 @@ def setup(
 
     precision = precision or get_default_supported_precision(training=True)
     logger = choose_logger(
-        logger_name, out_dir, name=f"finetune-{config.name}", resume=bool(resume), log_interval=train.log_interval
+        logger_name, out_dir, project=f"finetune-{config.name}", resume=bool(resume), log_interval=train.log_interval
     )
 
     if devices * num_nodes > 1:

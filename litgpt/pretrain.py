@@ -4,7 +4,8 @@
 # we take this default litgpt pre-trainign script and modify it to monitor the training process of the model
 #
 import torch._dynamo
-torch._dynamo.config.suppress_errors = True # when resuming from checkpoint, fall back to eager.
+torch._dynamo.config.suppress_errors = True  # when resuming from checkpoint, fall back to eager.
+torch._dynamo.config.cache_size_limit = 25   # allow to monitor up to 25 steps with a compiled model withoug falling back to eager
 
 import math
 import pprint
@@ -82,7 +83,9 @@ def setup(
     logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
     training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training
-    with_reference_model: bool = True,         # whether the pre-training script should do forward passes with the reference model (i.e. the model at time step zero)  
+    with_reference_model: bool = True,         # whether the pre-training script should do forward passes with the reference model (i.e. the model at time step zero)
+    with_advanced_activation_differences: bool = False, # whether to perform forward passes with the reference model using the intermediate activations of the main module
+    with_compile: bool = True,                # whether to compile the model
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -145,14 +148,14 @@ def setup(
     # in case the dataset requires the Tokenizer
     tokenizer = Tokenizer(tokenizer_dir) if tokenizer_dir is not None else None
 
-    # check if "name" is in logger_kwargs and use it as the run name
-    run_name = f"pretrain-{config.name}"
-    if logger_kwargs and "name" in logger_kwargs:
-        run_name = logger_kwargs["name"]
-        del logger_kwargs["name"]
+    # check if "project" is in logger_kwargs and pass it as "name" to choose_logger
+    project = f"pretrain-{config.name}"
+    if logger_kwargs and "project" in logger_kwargs:
+        project = logger_kwargs["project"]
+        del logger_kwargs["project"]
         
     logger = choose_logger(
-        logger_name, out_dir, name=run_name, resume=False, log_interval=train.log_interval, entity="mup_limitations", **(logger_kwargs or {})  # need to check how to setup wandb resuming
+        logger_name, out_dir, project=project, resume=False, log_interval=train.log_interval, entity="mup_limitations", **(logger_kwargs or {})  # need to check how to setup wandb resuming
     )
 
     if devices * num_nodes > 1:
@@ -193,6 +196,8 @@ def setup(
         optimizer,
         training_monitor,
         with_reference_model,
+        with_advanced_activation_differences,
+        with_compile,
         initialize_weights_fn,
         get_lr_fn,
         use_pytorch_profiler,
@@ -215,6 +220,8 @@ def main(
     optimizer: Union[str, Dict],
     training_monitor :TrainingMonitor = None,
     with_reference_model: bool = True,
+    with_advanced_activation_differences = False,
+    with_compile: bool = True,
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -246,12 +253,21 @@ def main(
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters: {num_parameters(model):,}")
 
-    # turn off compilation because it leads to warnings with the hooks that I would like to understand better (?)
-    # model = torch.compile(model)
+    # register hooks to monitor the training process (according to torch.compile docs, this should happen before compilation)
+    training_monitor.set_module(model)
+    training_monitor.set_reference_module(reference_model)
+
+    if with_reference_model and with_advanced_activation_differences:
+        if fabric.world_size != 1:
+            raise ValueError("Advanced activation difference monitoring is only supported for single-GPU training")
+        training_monitor.monitor_activation_differences(reference_model)
+
+    # torch.compile the model and setup for distributed training
+    if with_compile:
+        model = torch.compile(model)
     model = fabric.setup(model)
 
     if reference_model is not None:
-        # reference_model = torch.compile(reference_model)
         reference_model = fabric.setup(reference_model)
 
     # lightning performs re-initialization of model weights with FSDP.
@@ -296,7 +312,7 @@ def main(
     fabric.print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
     fabric.print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 
-    # THIS IS THE ORIGINAL LITGPT RESUME TRAINING CODE THAT WE ARE NOT USING BECAUSE IT ALLOCATES EXCESS MEMORY
+    # THIS IS THE ORIGINAL LITGPT RESUME TRAINING CODE THAT WE ARE NOT USING (because it somehow failed for us)
     #resume = find_resume_path(resume, out_dir)
     #if resume:
     #    fabric.print(f"Resuming training from {resume}")
@@ -327,7 +343,7 @@ def main(
         tokenizer_dir, 
         train, 
         eval,
-        training_monitor, 
+        training_monitor,
         reference_model,
         get_lr_fn,
         use_pytorch_profiler)
@@ -407,14 +423,6 @@ def fit(
 
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
-    # monitor the training
-    training_monitor.set_module(model)
-    training_monitor.set_reference_module(reference_model)
-
-    # if we are training on a single gpu, monitor intermediate activation differences
-    if fabric.world_size == 1 and reference_model is not None:
-        training_monitor.monitor_activation_differences(reference_model)
-
     # profile the training with the pytorch profiler (optional)
     if use_pytorch_profiler:
         profiler = profile(
@@ -431,7 +439,6 @@ def fit(
     else:
         profiler = nullcontext()
 
-    # mointoring of the first step
     training_monitor.set_step(state["step_count"]+1)
 
     resume_data_iteration = False
@@ -469,25 +476,42 @@ def fit(
 
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
 
-        # monitor the first forward pass in detail
-        training_monitor.set_verbose(False)
-        if state["iter_num"] == 1:
-            training_monitor.set_verbose(True)
+        # monitored forward pass with a reference model. we divide the batch into two parts to avoid GPU OOM
+        if training_monitor.is_monitoring() and reference_model is not None and train.micro_batch_size > 1:
+            input_ids_first_one = input_ids[:train.micro_batch_size//2]
+            input_ids_second_one = input_ids[train.micro_batch_size//2:]
+            targets_first_one = targets[:train.micro_batch_size//2]
+            targets_second_one = targets[train.micro_batch_size//2:]
+            
+            loss_sum = None
+            for local_input_ids, local_targets in [(input_ids_first_one, targets_first_one), (input_ids_second_one, targets_second_one)]:
+                with fabric.no_backward_sync(model, enabled=is_accumulating):                                      
+                    with torch.no_grad():   
+                        _ = reference_model(local_input_ids)     
 
-        with fabric.no_backward_sync(model, enabled=is_accumulating):
-            # if we are monitoring the training step, we need to perform a forward pass with the reference model
-            # currently, we assume that all tensors and models are on the same device
-            if training_monitor.is_monitoring() and reference_model is not None:
-                with torch.no_grad():
-                    _ = reference_model(input_ids)
+                    logits = model(local_input_ids)
+                    loss = chunked_cross_entropy(logits, local_targets)
+                    fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
-            # (micro-) batch for the model
-            logits = model(input_ids)
-            loss = chunked_cross_entropy(logits, targets)
-            fabric.backward(loss / train.gradient_accumulation_iters(devices))
+                if loss_sum is None:
+                    loss_sum = loss.detach() / 2
+                else:
+                    loss_sum += loss.detach() / 2
 
-        running_loss.update(loss.detach())
-        training_monitor.clear_reference_activations()
+                training_monitor.clear_reference_activations()                                                                    
+            running_loss.update(loss_sum)
+
+        # normal forward pass
+        else:                                                                            
+            with fabric.no_backward_sync(model, enabled=is_accumulating):
+                # (micro-) batch
+                logits = model(input_ids)
+                loss = chunked_cross_entropy(logits, targets)
+                fabric.backward(loss / train.gradient_accumulation_iters(devices))
+
+            running_loss.update(loss.detach())
+            training_monitor.clear_reference_activations()
+        
         training_monitor.set_verbose(False)
 
         if not is_accumulating:
