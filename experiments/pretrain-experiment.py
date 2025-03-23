@@ -1,7 +1,7 @@
 # run a pre-training experiment, optionally monitoring the training process
 
 from litgpt.model import GPT, Config
-from litgpt.monitor import TrainingMonitor
+from litgpt.monitor import ModuleMonitor
 from litgpt.pretrain import setup
 from litgpt.args import TrainArgs, EvalArgs
 
@@ -155,7 +155,7 @@ if __name__ == "__main__":
     }
 
     # create the training monitor
-    training_monitor = TrainingMonitor(monitor_interval=args.monitor_interval, 
+    training_monitor = ModuleMonitor(monitor_interval=args.monitor_interval, 
                                        monitor=args.monitor,
                                        verbose=args.verbose_monitor,
                                        activation_metrics=activation_metrics,

@@ -52,7 +52,7 @@ from litgpt.utils import (
     save_hyperparameters,
 )
 
-from litgpt.monitor import TrainingMonitor
+from litgpt.monitor import ModuleMonitor
 from litgpt.mup import has_mup_enabled, instantiate_torch_mup_optimizer
 
 
@@ -82,7 +82,7 @@ def setup(
     tokenizer_dir: Optional[Path] = None,
     logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
-    training_monitor :TrainingMonitor = None , # added for the project. we montior activations, gradients and parameters during training
+    training_monitor :ModuleMonitor = None , # added for the project. we montior activations, gradients and parameters during training
     with_reference_model: bool = True,         # whether the pre-training script should do forward passes with the reference model (i.e. the model at time step zero)
     with_advanced_activation_differences: bool = False, # whether to perform forward passes with the reference model using the intermediate activations of the main module
     with_compile: bool = True,                # whether to compile the model
@@ -218,7 +218,7 @@ def main(
     train: TrainArgs,
     eval: EvalArgs,
     optimizer: Union[str, Dict],
-    training_monitor :TrainingMonitor = None,
+    training_monitor :ModuleMonitor = None,
     with_reference_model: bool = True,
     with_advanced_activation_differences = False,
     with_compile: bool = True,
@@ -378,7 +378,7 @@ def fit(
     tokenizer_dir: Optional[Path],
     train: TrainArgs,
     eval: EvalArgs,
-    training_monitor :TrainingMonitor = None,
+    training_monitor :ModuleMonitor = None,
     reference_model: Optional[nn.Module] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -439,7 +439,7 @@ def fit(
     else:
         profiler = nullcontext()
 
-    training_monitor.set_step(state["step_count"]+1)
+    training_monitor.start_step(state["step_count"]+1)
 
     resume_data_iteration = False
     if state["iter_num"] > 0:
@@ -515,7 +515,7 @@ def fit(
         training_monitor.set_verbose(False)
 
         if not is_accumulating:
-            training_monitor.after_forward() # the forward passes are over, gather activation statistics
+            training_monitor.aggregate_step() # the forward passes are over, gather activation statistics
 
             if fabric.world_size > 1 and fabric.global_rank == 0 and training_monitor.is_monitoring(): # FSDP requires parameter and gradient gathering for monitoring (rank0 only)
                 if reference_model is not None:
@@ -533,7 +533,7 @@ def fit(
             
             grad_norm = fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
             if grad_norm is not None:
-                training_monitor.monitor_scalars({"grad_norm": grad_norm})
+                training_monitor.log_scalars({"grad_norm": grad_norm})
 
             if fabric.world_size > 1 and fabric.global_rank == 0 and training_monitor.is_monitoring(): # same as above but after gradient clipping
                 if reference_model is not None:
@@ -589,7 +589,7 @@ def fit(
 
             throughput_metrics = throughput.compute()
             metrics.update(throughput_metrics)
-            training_monitor.monitor_scalars(metrics) 
+            training_monitor.log_scalars(metrics) 
             metrics.update(training_monitor.get_step_metrics())
             fabric.log_dict(metrics, step=state["step_count"])
             
@@ -602,7 +602,7 @@ def fit(
 
             fabric.print(f"iter {state['iter_num']}: val loss {val_loss:.4f}, val time: {td * 1000:.2f} ms")
             metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
-            training_monitor.monitor_scalars(metrics) 
+            training_monitor.log_scalars(metrics) 
             fabric.log_dict(metrics, step=state["step_count"])
             fabric.barrier()
 
@@ -611,7 +611,7 @@ def fit(
 
         # advance the training monitor to the gradient next step
         if not is_accumulating:
-            training_monitor.set_step(state["step_count"]+1)
+            training_monitor.start_step(state["step_count"]+1)
 
     if use_pytorch_profiler:
         profiler.stop()
@@ -621,7 +621,7 @@ def fit(
     if eval.final_validation:
         val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
         metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
-        training_monitor.monitor_scalars(metrics, force=True) 
+        training_monitor.log_scalars(metrics, force=True) 
         fabric.log_dict(metrics, step=state["iter_num"])
         fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
 

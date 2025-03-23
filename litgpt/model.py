@@ -14,7 +14,7 @@ import torch.nn as nn
 from typing_extensions import Self
 
 from litgpt.config import Config
-from litgpt.monitor import MonitoredModule
+from litgpt.monitor import MonitorMixin
 
 from litgpt.mup import has_mup_enabled
 
@@ -253,10 +253,10 @@ class Block(nn.Module):
         return x
 
 
-class CausalSelfAttention(nn.Module, MonitoredModule):
+class CausalSelfAttention(nn.Module, MonitorMixin):
     def __init__(self, config: Config, block_idx: int) -> None:
         nn.Module.__init__(self)  # Initialize nn.Module
-        MonitoredModule.__init__(self)  # Initialize MonitoredModule
+        MonitorMixin.__init__(self)  # Initialize MonitoredModule
         shape = (config.n_head + 2 * config.n_query_groups) * config.head_size
         # key, query, value projections for all heads, but in a batch
         self.attn = nn.Linear(config.n_embd, shape, bias=config.bias or config.attn_bias)

@@ -4,6 +4,8 @@ import numpy as np
 import math
 from typing import Union, List
 from numbers import Number
+import logging
+import sys
 
 
 def format_module_name(name: str):
@@ -59,7 +61,7 @@ def sparsity(tensor: torch.Tensor, threshold: float = 1e-6) -> torch.Tensor:
 # Modules can subclass MonitoredModule to implement
 # custom monitoring behavior.
 #################################################################
-class MonitoredModule:
+class MonitorMixin:
     """A torch.nn.Module can subclass this class to log custom metrics during the forward pass.
     This is used to monitor the attention operation.
 
@@ -86,7 +88,7 @@ class MonitoredModule:
 #################################################################
 # The training mointor class
 #################################################################
-class TrainingMonitor:
+class ModuleMonitor:
     """Monitor the training of a pytorch modules.
 
     Supports a reference module and micro-batches. 
@@ -119,7 +121,8 @@ class TrainingMonitor:
                  activation_metrics=None,
                  parameter_metrics=None,
                  gradient_metrics=None,
-                 activation_difference_metrics=None): 
+                 activation_difference_metrics=None,
+                 logger=None): 
         """Init the training monitor."""
         self.module = None
         self.module_hooks = {}
@@ -145,6 +148,13 @@ class TrainingMonitor:
         self.gradient_metrics = gradient_metrics if gradient_metrics is not None else {"l2norm": l2_norm}
         self.activation_difference_metrics = activation_difference_metrics if activation_difference_metrics is not None else {"l2norm": lambda x, y: l2_norm(x - y)}
 
+        # Initialize logger
+        if logger is None:
+            self.logger = logging.getLogger("ModuleMonitor")
+            self.logger.addHandler(logging.NullHandler())  # Silent default logger
+        else:
+            self.logger = logger
+
         if module is not None:
             self.set_module(module)
 
@@ -169,7 +179,7 @@ class TrainingMonitor:
             self.module_names = {}
             # if the module implements the MonitoredModule interface, remove the training monitor
             for _, m in module.named_modules():
-                if isinstance(m, MonitoredModule):
+                if isinstance(m, MonitorMixin):
                     m.set_training_monitor(None, False)
 
         # setup for the new module
@@ -177,10 +187,9 @@ class TrainingMonitor:
         for name, m in module.named_modules():
             self.module_names[m] = format_module_name(name)
             self.module_hooks[m] = m.register_forward_hook(self._get_activation_forwad_hook(self.module_names[m]))
-            if self.verbose:
-                print("Info: Registered forward hook for module ", name)
+            self.logger.debug("Registered forward hook for module %s", name)
             # if the module implements the MonitoredModule interface, set the training monitor
-            if isinstance(m, MonitoredModule):
+            if isinstance(m, MonitorMixin):
                 m.set_training_monitor(self, False)
 
 
@@ -201,7 +210,7 @@ class TrainingMonitor:
             self.reference_module_hooks[m] = m.register_forward_hook(self._get_reference_activation_forwad_hook())
 
             # if the module implements the MonitoredModule interface, set the training monitor
-            if isinstance(m, MonitoredModule):
+            if isinstance(m, MonitorMixin):
                 m.set_training_monitor(self, True)
 
         # register the parameters of the reference module
@@ -218,7 +227,7 @@ class TrainingMonitor:
             return
         # notify the MonitoredModules
         for _, m in self.reference_module.named_modules():
-            if isinstance(m, MonitoredModule):
+            if isinstance(m, MonitorMixin):
                 m.set_training_monitor(None, False)
         # remove the reference module
         self.reference_module = None
@@ -236,10 +245,11 @@ class TrainingMonitor:
     def set_verbose(self, verbose):
         self.verbose = verbose
 
+
     #################################################################
     # Set the current step, get log dict
     #################################################################
-    def set_step(self, step):
+    def start_step(self, step):
         """Notify the monitor that a new step has started. This function should be called before the forward pass. Returns True if the step should be monitored, False otherwise."""
         # clean-up any previous step (if not done already)
         self.reference_module_activations = {}
@@ -380,8 +390,8 @@ class TrainingMonitor:
     @classmethod
     def load_hdf5(cls, filename):
         log_dict = {}
-        for entry_key in TrainingMonitor.read_hdf5_entry_keys(filename):
-            keys, values = TrainingMonitor.read_hdf5_entry(filename, entry_key)
+        for entry_key in ModuleMonitor.read_hdf5_entry_keys(filename):
+            keys, values = ModuleMonitor.read_hdf5_entry(filename, entry_key)
             log_dict[entry_key] = {k: v for (k, v) in zip(list(keys), list(values))}
         return log_dict 
 
@@ -389,7 +399,7 @@ class TrainingMonitor:
     #################################################################
     # Basic logging functions
     #################################################################
-    def monitor_scalar(self, key: str, value, force=False):
+    def log_scalar(self, key: str, value, force=False):
         """Monitor a scalar value such as the loss or the learning rate.
         
         If force is set to True, the value is logged even if we are not monitoring the current step.
@@ -420,7 +430,7 @@ class TrainingMonitor:
             self.log_dict[self.step][key] = value
 
 
-    def monitor_tensor(self, key: str, tensor: torch.Tensor, force=False):
+    def log_tensor(self, key: str, tensor: torch.Tensor, force=False):
         """Monitor a torch.Tensor.
 
         Tensors are stored in a list and aggregated by after_forward.
@@ -446,10 +456,10 @@ class TrainingMonitor:
             self.log_dict[self.step][key] = [tensor]
 
 
-    def monitor_scalars(self, monitor_dict: dict, force=False):
+    def log_scalars(self, monitor_dict: dict, force=False):
         """Monitor a dictionary of scalar values."""
         for key, value in monitor_dict.items():
-            self.monitor_scalar(key, value, force=force)
+            self.log_scalar(key, value, force=force)
 
 
     #################################################################
@@ -482,11 +492,11 @@ class TrainingMonitor:
 
             # raise a warning if no reference module is set
             if not self.has_reference_module():
-                print(f"Warning: Attempted to monitor activations of the reference module, but no reference module is set (for module {module_name}).")
+                self.logger.warning("Attempted to monitor activations of the reference module, but no reference module is set (for module %s).", module_name)
                 return
             # raise a warning if the reference module has already stored activations for this module
             if module_name in self.reference_module_activations:
-                print(f"Warning: Attempted to monitor activations of the reference module for module {module_name}, but activations are already stored.")
+                self.logger.warning("Attempted to monitor activations of the reference module for module %s, but activations are already stored.", module_name)
                 return
             # store the activations
             self.reference_module_activations[module_name] = activations 
@@ -499,8 +509,8 @@ class TrainingMonitor:
             result = metric_fn(activations)
 
             # monitor the metric
-            log_entry = f"{module_name}.activation.{metric_name}"
-            self.monitor_tensor(log_entry, result)
+            log_entry = f"activation/{module_name}/{metric_name}"
+            self.log_tensor(log_entry, result)
 
         # metrics based on the activations and the reference activations (most likely L2 norm)
         if self.has_reference_module():
@@ -511,14 +521,12 @@ class TrainingMonitor:
                     # compute the metric
                     result = metric_fn(activations, ref_activations)
 
-                    log_entry = f"{module_name}.activation.diff.{metric_name}"
-                    self.monitor_tensor(log_entry, result)
+                    log_entry = f"activation_difference/{module_name}/{metric_name}"
+                    self.log_tensor(log_entry, result)
             else:
-                if self.verbose:
-                    print("Warning: No reference module activations found for module ", module_name)
+                self.logger.warning("No reference module activations found for module %s", module_name)
 
-        if self.verbose:
-            print("Info: Monitored activations of module ", module_name, " with shape ", activations.shape)
+        self.logger.debug("Monitored activations of module %s with shape %s", module_name, activations.shape)
 
 
     def _get_activation_forwad_hook(self, module_name : str):
@@ -538,7 +546,7 @@ class TrainingMonitor:
         self.reference_module_activations = {}
     
 
-    def after_forward(self):
+    def aggregate_step(self):
         """This function is called after all mini-batches of a gradient step are done. It aggregates the batch statistics. """
         if self.is_monitoring():
             # aggregate metrics
@@ -555,13 +563,8 @@ class TrainingMonitor:
                         self.log_dict[self.step][k + ".std"] = np.std(v)
 
             # print total number of keys
-            if self.verbose:
-                print("Training Monitor: Total number of logging keys in the current step:", len(self.log_dict[self.step]))
-
-                # size of the dict in mb
-                import sys
-                size = sys.getsizeof(self.log_dict) / 1024 / 1024
-                print("Training Monitor: Size of log_dict in MB:", size)
+            self.logger.info("Finished step %s. Monitored a total of %s keys.", self.step, len(self.log_dict[self.step]))
+            self.logger.info("Current size of log_dict in MB: %s", sys.getsizeof(self.log_dict) / 1024 / 1024)
 
 
     #######################################################################################
@@ -623,8 +626,10 @@ class TrainingMonitor:
                 result = metric_fn(output, comp_output.detach())
 
                 # monitor the metric
-                log_entry = f"{module_name}.activation.intermediate_diff.{metric_name}"
-                self.monitor_tensor(log_entry, result)
+                log_entry = f"advanced_activation_difference/{module_name}/{metric_name}"
+                self.log_tensor(log_entry, result)
+
+            self.logger.debug("Monitored advanced activation differences of module %s with shape %s", module_name, output.shape)
 
         return hook
 
@@ -649,9 +654,6 @@ class TrainingMonitor:
         Follows the signature of the pytorch function torch.nn.functional.scaled_dot_product_attention.
         """
         module_name = self._module_name(module, is_reference)
-
-        if self.verbose:
-            print("Info: Monitoring scaled dot product attention for module ", module_name, " with query shape ", query.shape, " key shape ", key.shape, " value shape ", value.shape)
 
         # the monitoring here is VERY inefficient, as we have to recompute the attention weights
         # first, we detach all tensors from the computational graph
@@ -699,8 +701,7 @@ class TrainingMonitor:
                 if activation is not None:
                     self.monitor_activations(f"{module_name}.head_{i_head}.activation", o, is_reference=is_reference)
         else:
-            if self.verbose:
-                print("Warning: monitor_scaled_dot_product_attention assumes that S == L and that the key query and value tensor have the same dimension.")
+            self.logger.warning("monitor_scaled_dot_product_attention assumes that S == L and that the key query and value tensor have the same dimension.")
 
         attn_weight = query @ key.transpose(-2, -1) * scale_factor
         attn_weight += attn_bias
@@ -713,10 +714,10 @@ class TrainingMonitor:
             for i_head in range(n_head):
                 w = attn_weight[..., i_head, :, :]
                 entropy = -torch.sum(w * torch.log(w + 1e-8), dim=-1)
-                self.monitor_tensor(f"{module_name}.head_{i_head}.attention_entropy", entropy)
+                self.log_tensor(f"attention_entropy/{module_name}.head_{i_head}", entropy)
+                self.logger.debug("Monitored attention entropy for head %s with shape %s", i_head, entropy.shape)
 
-                if self.verbose:
-                    print("Info: Monitored attention entropy for head ", module_name, " with shape ", entropy.shape)
+        self.logger.debug("Monitored scaled dot product attention for module %s with query shape %s, key shape %s, value shape %s", module_name, query.shape, key.shape, value.shape)
         # return attn_weight @ value [This is provided in the activation argument]
 
 
@@ -729,8 +730,7 @@ class TrainingMonitor:
         
         for name, param in self.module.named_parameters():
             if param.grad is None:
-                if self.verbose:
-                    print("Warning: Found a parameter where the gradient is None:", name)
+                self.logger.warning("Found a parameter where the gradient is None: %s", name)
                 continue
 
             # log the different metrics (most likely the frobenius norm of the gradients)
@@ -743,14 +743,12 @@ class TrainingMonitor:
                     result = result.item()
 
                 # Create log entry
-                log_entry = f"{format_module_name(name)}.gradient.{metric_name}"
+                log_entry = f"gradient/{format_module_name(name)}/{metric_name}"
                 if before_clip:
-                    log_entry += ".before_clip"
+                    log_entry = log_entry.replace("gradient/", "gradient_before_clip/", count=1)
 
-                self.monitor_scalar(log_entry, result)
-
-                if self.verbose:
-                    print("Info: Parameter ", name, " has gradient of shape ", param.grad.shape, " with ", metric_name, " ", result, "(logged as ", log_entry, ")")
+                self.log_scalar(log_entry, result)
+                self.logger.debug("Monitored gradient of parameter %s with shape %s with %s %s (logged as %s)", name, param.grad.shape, metric_name, result, log_entry)
 
 
     #################################################################
@@ -772,19 +770,17 @@ class TrainingMonitor:
                     result = result.item()
 
                 # Create log entry
-                log_entry = f"{format_module_name(name)}.{metric_name}"
-                self.monitor_scalar(log_entry, result)
+                log_entry = f"parameter/{format_module_name(name)}/{metric_name}"
+                self.log_scalar(log_entry, result)
+                self.logger.debug("Monitored parameter %s with shape %s with %s %s (logged as %s)", name, param.shape, metric_name, result, log_entry)
 
-                if self.verbose:
-                    print("Info: Parameter ", name, " has shape ", param.shape, " with ", metric_name, " ", result, "(logged as ", log_entry, ")")
-                    
             # the difference in l2 norm to the reference module
             if self.reference_module is not None:
                 key = format_module_name(name)
                 ref_param = self.reference_module_parameters[key]
-                log_entry = f"{format_module_name(name)}.diff.l2norm"
+                log_entry = f"parameter_difference/{format_module_name(name)}/l2norm"
                 diff = (param - ref_param).norm(p='fro').item()
-                self.monitor_scalar(log_entry, diff)
+                self.log_scalar(log_entry, diff)
     
 
     #################################################################
@@ -799,19 +795,20 @@ class TrainingMonitor:
         from copy import deepcopy
         new_log_dict = deepcopy(self.log_dict)
 
-        for step, step_logs in new_log_dict.items():
+        for step, step_logs in self.log_dict.items():
             for key, value in step_logs.items():
+                if not (key.startswith("activation") or not key.startswith("activation_difference")):
+                    continue
+
                 # means
-                if key.endswith("activation.l2norm") or \
-                   key.endswith("activation.diff.l2norm"):
+                if key.endswith("l2norm"):
                     means = [value]
                     for other_log_dict in other_log_dicts:
                          means.append(other_log_dict[step][key])
                     mean = np.mean(means)
                     new_log_dict[step][key] = mean
                 # standard deviations
-                elif key.endswith("activation.l2norm.std") or \
-                     key.endswith("activation.diff.l2norm.std"):
+                elif key.endswith("l2norm.std"):
                     # gather the stds
                     stds = [value]
                     for other_log_dict in other_log_dicts:
@@ -842,7 +839,7 @@ class TrainingMonitor:
             module_name = self.reference_module_names[module]
         else:
             if not module in self.module_names:
-                print("Warning: Module ", module, " not found in the module names dict.")
+                self.logger.warning("Module %s not found in the module names dict.", module)
                 return "[unknown module]"
             module_name = self.module_names[module]
         assert isinstance(module_name, str)
