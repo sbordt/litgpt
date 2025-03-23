@@ -159,14 +159,9 @@ if __name__ == "__main__":
     }
 
     # create the training monitor
-    logger = logging.getLogger("ModuleMonitor")
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
-    logger.addHandler(handler)
-
     training_monitor = ModuleMonitor(monitor_interval=args.monitor_interval, 
                                        monitor=args.monitor,
-                                       logger=logger,
+                                       logger=logging.getLogger("ModuleMonitor"),
                                        activation_metrics=activation_metrics,
                                        parameter_metrics=parameter_metrics,
                                        gradient_metrics=gradient_metrics,
