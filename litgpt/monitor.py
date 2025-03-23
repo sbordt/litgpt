@@ -117,7 +117,6 @@ class ModuleMonitor:
                  monitor_interval = 20,
                  step_start = 0,
                  monitor = True,
-                 verbose = False,
                  activation_metrics=None,
                  parameter_metrics=None,
                  gradient_metrics=None,
@@ -136,7 +135,6 @@ class ModuleMonitor:
         self.reference_module_parameters = {}   # a mapping from parameter names to the parameters
         self.reference_module_activations = {}  # a mapping from module names to their activations
 
-        self.verbose = verbose
         self.monitor_interval = monitor_interval
         self.step = step_start
         self.monitor = monitor
@@ -241,9 +239,6 @@ class ModuleMonitor:
 
     def has_reference_module(self): 
         return self.reference_module is not None
-    
-    def set_verbose(self, verbose):
-        self.verbose = verbose
 
 
     #################################################################
@@ -291,109 +286,6 @@ class ModuleMonitor:
     def get_all_metrics(self):
         """Return the full log dict with all steps that have been logged so far."""
         return self.log_dict
-
-
-    #################################################################
-    # HDF5 saving and loading
-    #################################################################
-    def condensed_log_dict(self):
-        """Take the log_dict which has the form
-        {
-            step1: {"key1": value1, "key2": value2},
-            step2: {"key1": value1, "key2": value2},
-        }
-
-        and return a new dict of the form
-        {
-            "key1": {step1: value1, step2: value2},
-            "key2": {step1: value1, step2: value2},
-        }
-        """
-        new_dict = {}
-        for key, value in self.log_dict.items():
-            for name, val in value.items():
-                if name not in new_dict:
-                    new_dict[name] = {}
-                new_dict[name][key] = val
-        return new_dict
-
-
-    def save_hdf5(self, filename, condensed=True):
-        """Save the log dict as hdf5."""
-        import h5py
-
-        log_dict = self.log_dict
-        if condensed:
-            log_dict = self.condensed_log_dict()
-
-        with h5py.File(filename, 'w') as f:
-            for parameter, value_dict in log_dict.items():
-                # Create a group for each parameter
-                group = f.create_group(parameter)
-
-                # Save keys and values separately, converting to list first
-                # This avoids numpy array conversion issues
-                keys = list(value_dict.keys())
-                values = list(value_dict.values())
-
-                keys = np.array(keys, dtype=np.float64)
-                values = np.array(values, dtype=np.float64)
-
-                group.create_dataset('keys', data=keys)
-                group.create_dataset('values', data=values)
-
-    
-    @classmethod
-    def read_hdf5_entry_keys(cls, filename):
-        """Read the names of the entries in a hdf5 file."""
-        import h5py
-
-        with h5py.File(filename, 'r') as f:
-            return list(f.keys())
-
-
-    @classmethod 
-    def read_hdf5_entry(cls, filename, entry_key):
-        """
-        Read a single entry from HDF5 file by its outer key.
-        
-        Args:
-            filename (str): Input HDF5 filename
-            entry_key (str): The outer key to load
-        
-        Returns:
-            dict: Single inner dictionary corresponding to entry_key
-            None: If entry_key doesn't exist
-        """
-        import h5py
-
-        with h5py.File(filename, 'r') as f:
-            # Convert key to string for HDF5 lookup
-            key_str = str(entry_key)
-            
-            # Check if key exists
-            if key_str not in f:
-                return None
-                
-            # Read just this group
-            inner_dict = {}
-            for key in f[key_str]:
-                value = f[key_str][key][()]
-                # Convert numpy types back to Python native types
-                if isinstance(value, np.generic):
-                    value = value.item()
-                inner_dict[key] = value
-                
-            return inner_dict['keys'], inner_dict['values']
-
-
-    @classmethod
-    def load_hdf5(cls, filename):
-        log_dict = {}
-        for entry_key in ModuleMonitor.read_hdf5_entry_keys(filename):
-            keys, values = ModuleMonitor.read_hdf5_entry(filename, entry_key)
-            log_dict[entry_key] = {k: v for (k, v) in zip(list(keys), list(values))}
-        return log_dict 
 
 
     #################################################################
@@ -824,6 +716,112 @@ class ModuleMonitor:
                     new_log_dict[step][key] = std
 
         self.log_dict = new_log_dict # successfull merge
+
+
+    #################################################################
+    # HDF5 saving and loading
+    #################################################################
+    def condensed_log_dict(self):
+        """Take the log_dict which has the form
+        {
+            step1: {"key1": value1, "key2": value2},
+            step2: {"key1": value1, "key2": value2},
+        }
+
+        and return a new dict of the form
+        {
+            "key1": {step1: value1, step2: value2},
+            "key2": {step1: value1, step2: value2},
+        }
+        """
+        new_dict = {}
+        for key, value in self.log_dict.items():
+            for name, val in value.items():
+                if name not in new_dict:
+                    new_dict[name] = {}
+                new_dict[name][key] = val
+        return new_dict
+
+
+    def save_hdf5(self, filename, condensed=True):
+        """Save the log dict as hdf5."""
+        import h5py
+
+        log_dict = self.log_dict
+        if condensed:
+            log_dict = self.condensed_log_dict()
+
+        with h5py.File(filename, 'w') as f:
+            for parameter, value_dict in log_dict.items():
+                try:
+                    # Create a group for each parameter
+                    group = f.create_group(parameter)
+
+                    # Save keys and values separately, converting to list first
+                    # This avoids numpy array conversion issues
+                    keys = list(value_dict.keys())
+                    values = list(value_dict.values())
+
+                    keys = np.array(keys, dtype=np.float64)
+                    values = np.array(values, dtype=np.float64)
+
+                    group.create_dataset('keys', data=keys)
+                    group.create_dataset('values', data=values)
+                except Exception as e:
+                    self.logger.warning("Could not save parameter %s with keys %s and values %s: %s", parameter, keys, values, e)
+
+    
+    @classmethod
+    def read_hdf5_entry_keys(cls, filename):
+        """Read the names of the entries in a hdf5 file."""
+        import h5py
+
+        with h5py.File(filename, 'r') as f:
+            return list(f.keys())
+
+
+    @classmethod 
+    def read_hdf5_entry(cls, filename, entry_key):
+        """
+        Read a single entry from HDF5 file by its outer key.
+        
+        Args:
+            filename (str): Input HDF5 filename
+            entry_key (str): The outer key to load
+        
+        Returns:
+            dict: Single inner dictionary corresponding to entry_key
+            None: If entry_key doesn't exist
+        """
+        import h5py
+
+        with h5py.File(filename, 'r') as f:
+            # Convert key to string for HDF5 lookup
+            key_str = str(entry_key)
+            
+            # Check if key exists
+            if key_str not in f:
+                return None
+                
+            # Read just this group
+            inner_dict = {}
+            for key in f[key_str]:
+                value = f[key_str][key][()]
+                # Convert numpy types back to Python native types
+                if isinstance(value, np.generic):
+                    value = value.item()
+                inner_dict[key] = value
+                
+            return inner_dict['keys'], inner_dict['values']
+
+
+    @classmethod
+    def load_hdf5(cls, filename):
+        log_dict = {}
+        for entry_key in ModuleMonitor.read_hdf5_entry_keys(filename):
+            keys, values = ModuleMonitor.read_hdf5_entry(filename, entry_key)
+            log_dict[entry_key] = {k: v for (k, v) in zip(list(keys), list(values))}
+        return log_dict 
 
 
     #################################################################

@@ -511,8 +511,6 @@ def fit(
 
             running_loss.update(loss.detach())
             training_monitor.clear_reference_activations()
-        
-        training_monitor.set_verbose(False)
 
         if not is_accumulating:
             training_monitor.aggregate_step() # the forward passes are over, gather activation statistics

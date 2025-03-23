@@ -23,6 +23,8 @@ import math
 import torch
 torch.set_float32_matmul_precision('high')  
 
+import logging
+
 
 # learning rate decay scheduler (cosine with linear warmup)
 def get_lr(learning_rate: float, it: int, warmup_iters: int, max_iters: int, min_lr: float, step: int) -> float:
@@ -55,11 +57,11 @@ if __name__ == "__main__":
     # parser.add_argument("--tokenizer_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/checkpoints/EleutherAI/pythia-14m")
     parser.add_argument("--timestamp", type=str, default=None)
     parser.add_argument("--resume", action="store_true", default=False, help="resume training from the most recent checkpoint. the checkpoint needs to exist.")
+    parser.add_argument("--log-level", type=str, default="INFO", help="logging level")
     # monitoring parameters
     parser.add_argument("--monitor", action="store_true", default=True)
     parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
     parser.add_argument("--monitor_interval", type=int, default=100)
-    parser.add_argument("--verbose_monitor", action="store_true", default=False)
     parser.add_argument("--reference-model", action="store_true", default=True, 
                     help="compare activations to the reference model at initialization")
     parser.add_argument("--no-reference-model", action="store_false", dest="reference_model",
@@ -88,6 +90,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-compile", action="store_false", dest="compile",
                     help="disable model compilation with torch.compile")
     args = parser.parse_args()
+
+    logging.basicConfig(level=args.log_level)
 
     SLURM_PROCID = int(os.environ.get('SLURM_PROCID', 0)) # Get SLURM process ID (equivalent to rank in distributed training)
     WORLD_SIZE = int(os.environ.get('SLURM_NTASKS', 1)) # Get total number of tasks
@@ -155,9 +159,14 @@ if __name__ == "__main__":
     }
 
     # create the training monitor
+    logger = logging.getLogger("ModuleMonitor")
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
+    logger.addHandler(handler)
+
     training_monitor = ModuleMonitor(monitor_interval=args.monitor_interval, 
                                        monitor=args.monitor,
-                                       verbose=args.verbose_monitor,
+                                       logger=logger,
                                        activation_metrics=activation_metrics,
                                        parameter_metrics=parameter_metrics,
                                        gradient_metrics=gradient_metrics,
@@ -234,3 +243,5 @@ if __name__ == "__main__":
     if WORLD_SIZE > 1 and SLURM_PROCID == 0:
         for i in range(1, WORLD_SIZE):
             os.remove(os.path.join(run_dir, f"log_dict_rank{i}.pkl"))
+
+    logging.shutdown()
