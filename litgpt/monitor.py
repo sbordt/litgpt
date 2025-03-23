@@ -469,8 +469,10 @@ class ModuleMonitor:
                         self.log_dict[self.step][k + ".std"] = np.std(v)
 
             # print total number of keys
-            self.logger.info(f"Step {self.step}: ModuleMonitor logged %s keys. Current size of log data: %i MB", self.step, len(self.log_dict[self.step]), sys.getsizeof(self.log_dict) / 1024 / 1024)
-
+            size_mb = sys.getsizeof(self.log_dict) / 1024 / 1024
+            self.logger.info(
+                f"Step {self.step}: ModuleMonitor logged {len(self.log_dict[self.step])} keys. Current size of log data: {size_mb:.2f} MB"
+            )
 
     #######################################################################################
     # Monitoring of activation differences with  requires additional forward passes.
