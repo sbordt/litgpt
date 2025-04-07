@@ -262,10 +262,10 @@ class CausalSelfAttention(nn.Module, MonitorMixin):
         self.attn = nn.Linear(config.n_embd, shape, bias=config.bias or config.attn_bias)
         # qk norm
         self.q_norm = (
-            config.norm_class(config.n_embd, eps=config.norm_eps) if config.qk_norm else nn.Identity()
+            config.norm_class(config.n_head, eps=config.norm_eps) if config.qk_norm else nn.Identity()
         )
         self.k_norm = (
-            config.norm_class(config.n_embd, eps=config.norm_eps) if config.qk_norm else nn.Identity()
+            config.norm_class(config.n_head, eps=config.norm_eps) if config.qk_norm else nn.Identity()
         )
         # output projection
         # if `head_size` is explicitly specified in the config, `n_emd` might not be equal to `head_size * n_head`
