@@ -99,6 +99,8 @@ if __name__ == "__main__":
         raise ValueError("Experiment name must be provided")
     if WORLD_SIZE > 1 and args.run_id is None:
         raise ValueError("Run-id must be provided for multi-GPU training")
+    if args.resume and args.run_id is None:
+        raise ValueError("Run-id must be provided for resuming training")
     
     # setup a shared directory for all experiments with the same name
     experiment_name = args.experiment_name

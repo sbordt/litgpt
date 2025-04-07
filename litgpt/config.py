@@ -57,6 +57,7 @@ class Config:
     norm_class_name: Literal["LayerNorm", "RMSNorm"] = "LayerNorm"
     post_attention_norm: bool = False
     post_mlp_norm: bool = False
+    qk_norm: bool = False
     norm_eps: float = 1e-5
     mlp_class_name: Literal["GptNeoxMLP", "LLaMAMLP", "GemmaMLP", "LLaMAMoE"] = "GptNeoxMLP"
     gelu_approximate: str = "none"

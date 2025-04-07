@@ -260,6 +260,13 @@ class CausalSelfAttention(nn.Module, MonitorMixin):
         shape = (config.n_head + 2 * config.n_query_groups) * config.head_size
         # key, query, value projections for all heads, but in a batch
         self.attn = nn.Linear(config.n_embd, shape, bias=config.bias or config.attn_bias)
+        # qk norm
+        self.q_norm = (
+            config.norm_class(config.n_embd, eps=config.norm_eps) if config.qk_norm else nn.Identity()
+        )
+        self.k_norm = (
+            config.norm_class(config.n_embd, eps=config.norm_eps) if config.qk_norm else nn.Identity()
+        )
         # output projection
         # if `head_size` is explicitly specified in the config, `n_emd` might not be equal to `head_size * n_head`
         self.proj = nn.Linear(config.head_size * config.n_head, config.n_embd, bias=config.bias)
@@ -303,6 +310,11 @@ class CausalSelfAttention(nn.Module, MonitorMixin):
         q = q.reshape(B, -1, T, self.config.head_size)  # (B, nh_q, T, hs)
         k = k.reshape(B, -1, T, self.config.head_size)  # (B, nh_k, T, hs)
         v = v.reshape(B, -1, T, self.config.head_size)  # (B, nh_v, T, hs)
+
+        # apply qk norm on the head dimension (as in https://arxiv.org/pdf/2309.14322)
+        if self.config.qk_norm:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
 
         q_roped = apply_rope(q[..., : self.config.rope_n_elem], cos, sin)
         k_roped = apply_rope(k[..., : self.config.rope_n_elem], cos, sin)
