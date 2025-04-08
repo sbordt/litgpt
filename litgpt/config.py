@@ -157,9 +157,14 @@ class Config:
 
         if self.norm_class_name == "RMSNorm":
             
-            from litgpt.model import RMSNorm
+            # our implementation
+            from torch.nn import RMSNorm as TorchRMSNorm
 
-            return partial(RMSNorm, add_unit_offset="Gemma" in self.name, elementwise_affine=self.rmsnorm_elementwise_affine)
+            return partial(TorchRMSNorm, elementwise_affine=self.rmsnorm_elementwise_affine)
+
+            # litgpt default
+            #from litgpt.model import RMSNorm
+            #return partial(RMSNorm, add_unit_offset="Gemma" in self.name)
 
         if self.norm_class_name == "LayerNorm" and "OLMo" in self.name:
             # this makes it equivalent to `torch.nn.functional.layer_norm`
