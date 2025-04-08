@@ -54,7 +54,7 @@ if __name__ == "__main__":
     parser.add_argument("--run_id", type=str, default=None)
     parser.add_argument("--experiment_name", type=str, default=None, help="name of the experiment (required)")
     parser.add_argument("--output_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/moritz_sebastian_2025/")
-    parser.add_argument("--data_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/dclm-baseline-1.0-tokenized-preview")
+    parser.add_argument("--data_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/dclm-baseline-1.0-tokenized")
     parser.add_argument("--save_interval", type=int, default=1000)
     parser.add_argument("--resume", action="store_true", default=False, help="resume training from the most recent checkpoint. the checkpoint needs to exist.")
     parser.add_argument("--log-level", type=str, default="INFO", help="logging level")
@@ -69,8 +69,10 @@ if __name__ == "__main__":
     parser.add_argument("--advanced_activation_differences", action="store_true", default=False)
     # parameters of the pre-training run
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
+    parser.add_argument("--norm_class_name", type=str, default="LayerNorm", help="Set to LayerNorm or RMSNorm")
+    parser.add_argument("--qk_norm", action="store_true", default=False, help="enable qk normalization")
     parser.add_argument("--width", type=int, default=128, help="width scaling")
-    parser.add_argument("--max_tokens", type=int, default=6400000000) # 6.4B is 2x Chinchilla for 160m model
+    parser.add_argument("--max_tokens", type=int, default=1400000000) # 6.4B is 2x Chinchilla for 160m model
     parser.add_argument("--warmup_steps", type=float, default=700)
     parser.add_argument("--max_seq_length", type=int, default=512)
     parser.add_argument("--global_batch_size", type=int, default=512)
@@ -125,8 +127,13 @@ if __name__ == "__main__":
             os.makedirs(run_dir, exist_ok=False)
     logging.info(f"Run directory: {run_dir}")
 
-    # create the model config with appropriate width scaling
+    # create the model config
     model_config = Config.from_name(args.model)
+    model_config.norm_class_name = args.norm_class_name
+    model_config.rmsnorm_elementwise_affine = False # disable elementwise affine for RMSNorm
+    model_config.qk_norm = args.qk_norm
+    model_config.__post_init__() # required as we re-set the norm class name
+
     if args.mup:
         model_config = apply_mup(model_config, args.width, args.mup_input_alpha, args.mup_output_alpha) # add mup hyperparameters
     else:
