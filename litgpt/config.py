@@ -55,6 +55,7 @@ class Config:
     n_query_groups: Optional[int] = None
     shared_attention_norm: bool = False
     norm_class_name: Literal["LayerNorm", "RMSNorm"] = "LayerNorm"
+    rmsnorm_elementwise_affine = True
     post_attention_norm: bool = False
     post_mlp_norm: bool = False
     qk_norm: bool = False
@@ -158,7 +159,7 @@ class Config:
             
             from litgpt.model import RMSNorm
 
-            return partial(RMSNorm, add_unit_offset="Gemma" in self.name)
+            return partial(RMSNorm, add_unit_offset="Gemma" in self.name, elementwise_affine=self.rmsnorm_elementwise_affine)
 
         if self.norm_class_name == "LayerNorm" and "OLMo" in self.name:
             # this makes it equivalent to `torch.nn.functional.layer_norm`
