@@ -157,8 +157,8 @@ if __name__ == "__main__":
         "l2norm": l2_norm,
     }
     parameter_metrics_spec = {
-        r".*": {"l2norm": l2_norm},                                             # l2 norm for all parameters
-        r".*.norm_.*": {"opnorm": lambda x: x.abs().max(dim=-1).values},         # operator norm for normalization layers (the maximum parameter value)
+        r".*": {"l2norm": lambda param: l2_norm(param.flatten())},                                             # l2 norm for all parameters
+        r".*.norm_.*": {"opnorm": lambda param: param.abs().max(dim=-1).values},         # operator norm for normalization layers (the maximum parameter value)
         r".*mlp\.(fc|proj)\.weight.*" : {"opnorm": matrix_opnorm},              # operator norm for linear layers   
     }
     gradient_metrics = {

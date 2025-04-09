@@ -695,8 +695,7 @@ class ModuleMonitor:
     def _monitor_parameter(self, name, param, metric_fn, metric_name):
         """Low-level function that logs a metric for a parameter."""
         try:
-            # apply the metrics to the flattened parameter tensor
-            result = metric_fn(param.flatten())
+            result = metric_fn(param)
 
             # if result is a tensor, apply item()
             if isinstance(result, torch.Tensor):
