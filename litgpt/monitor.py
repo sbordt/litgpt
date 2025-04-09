@@ -721,7 +721,7 @@ class ModuleMonitor:
             for compiled_re, metrics_dict in self.parameter_metrics_spec.items():
                 if compiled_re.match(name):
                     for metric_name, metric_fn in metrics_dict.items():
-                        self.monitor_parameter(name, param, metric_fn, metric_name)
+                        self._monitor_parameter(name, param, metric_fn, metric_name)
 
             # the difference in l2 norm to the reference module
             if self.reference_module is not None:
