@@ -72,7 +72,9 @@ class MonitorMixin:
     """
     def __init__(self):
         self.training_monitor = None
-        self.is_reference_module = False
+
+        self.is_reference_module = False 
+        """Whether the module is a part of the reference module."""
 
     def set_training_monitor(self, monitor =None, is_reference_module =False):
         self.training_monitor = monitor
@@ -122,12 +124,14 @@ class ModuleMonitor:
                  parameter_metrics=None,
                  gradient_metrics=None,
                  activation_difference_metrics=None,
-                 logger=None): 
+                 logger=None,
+                 cpu_offload=False): 
         """Init the training monitor."""
         self.module = None
         self.module_hooks = {}
         self.activation_difference_hooks = {}   # used by monitor_activation_differences
         self.module_names = {}                  # a mapping from modules to their names
+        self.cpu_offload = cpu_offload          # whether to offload activations to the CPU
 
         self.reference_module = None
         self.reference_module_hooks = {}
@@ -245,32 +249,36 @@ class ModuleMonitor:
     #################################################################
     # Set the current step, get log dict
     #################################################################
-    def start_step(self, step):
+    def start_step(self, step: int):
         """Notify the monitor that a new step has started. This function should be called before the forward pass. Returns True if the step should be monitored, False otherwise."""
         # clean-up any previous step (if not done already)
-        self.reference_module_activations = {}
-        
-        self.monitor_step = False
-        if not self.monitor: # do not monitor
-            return False
-        
-        # check that there is a module to monitor
-        if self.module is None:
-            raise ValueError("No module to monitor. Please set the module first.")
+        self.reference_module_activations = {}        
 
         # do we monitor this step?
+        self.monitor_step = self.is_step_monitored(step)
         self.step = step
-        self.monitor_step = step % self.monitor_interval == 1
-        if step <= 20:  # monitor the first 20 steps
-            self.monitor_step = True
-        if not self.monitor_step and step <= 100: # more frequent monitoring for the first 100 steps
-            self.monitor_step = step % 20 == 1
+
+        # check that there is a module to monitor
+        if self.monitor_step and self.module is None:
+            raise ValueError("No module to monitor. Please set the module first.")
 
         # if we monitor this step, create a new entry in the log dict
         if self.monitor_step: 
             self.log_dict[step] = {}
             
         return self.monitor_step
+    
+
+    def is_step_monitored(self, step: int):
+        """Will we monitor the given step? Most useful to check if the next step will be monitored in case we need to do some setting up before the step."""
+        if not self.monitor: # global toggle to turn off monitoring
+            return False
+        monitor_step = step % self.monitor_interval == 1
+        if step <= 20:  # we always monitor the first 20 steps
+            monitor_step = True
+        if not monitor_step and step <= 100: # more frequent monitoring for the first 100 steps
+            monitor_step = step % 20 == 1
+        return monitor_step
     
 
     def is_monitoring(self):
@@ -280,7 +288,7 @@ class ModuleMonitor:
     @contextmanager
     def no_monitoring(self):
         """
-        Context manager to temporarily disable monitoring.
+        Context manager to temporarily disable all monitoring. Use this to compute the validation loss and perform other forward operations that should not be monitored.
         """
         original_state = self.monitor_step
         self.monitor_step = False
@@ -409,6 +417,9 @@ class ModuleMonitor:
             if module_name in self.reference_module_activations:
                 self.logger.warning(f"Step {self.step}: Attempted to monitor activations of the reference module for module %s, but activations are already stored.", module_name)
                 return
+            # optionally, offoad the activations to the CPU. this is extremely expensive but saves GPU memory.
+            if self.cpu_offload:
+                activations = activations.cpu()
             # store the activations
             self.reference_module_activations[module_name] = activations 
             # we are done
@@ -427,6 +438,8 @@ class ModuleMonitor:
         if self.has_reference_module():
             if module_name in self.reference_module_activations:
                 ref_activations = self.reference_module_activations[module_name]
+                if self.cpu_offload: # activations need to be on the same device
+                    activations = activations.cpu()
 
                 for metric_name, metric_fn in self.activation_difference_metrics.items():
                     # compute the metric

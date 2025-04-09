@@ -62,10 +62,9 @@ if __name__ == "__main__":
     parser.add_argument("--monitor", action="store_true", default=True)
     parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
     parser.add_argument("--monitor_interval", type=int, default=100)
-    parser.add_argument("--reference-model", action="store_true", default=True, 
-                    help="compare activations to the reference model at initialization")
-    parser.add_argument("--no-reference-model", action="store_false", dest="reference_model",
-                    help="disable comparison of activations to the reference model")
+    parser.add_argument("--reference-model", action="str", default=None, help="compare activations to a reference model. 'init': compare to the model at initialization, 'previous_step': compare to the model at the previous gradient step")
+    parser.add_argument("--mointor-cpu-offload", action="store_true", default=True, 
+                    help="enable CPU offloading for the reference model") # TODO implement!
     parser.add_argument("--advanced_activation_differences", action="store_true", default=False)
     # parameters of the pre-training run
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
@@ -214,7 +213,7 @@ if __name__ == "__main__":
         logger_name = "wandb",
         seed = args.seed,
         training_monitor = training_monitor,
-        with_reference_model = args.reference_model,
+        reference_model_type = args.reference_model,
         with_advanced_activation_differences = args.advanced_activation_differences,
         with_compile = args.compile,
         use_pytorch_profiler = args.use_pytorch_profiler,

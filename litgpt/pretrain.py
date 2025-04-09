@@ -84,10 +84,10 @@ def setup(
     tokenizer_dir: Optional[Path] = None,
     logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
-    training_monitor :ModuleMonitor = None , # added for the project. we montior activations, gradients and parameters during training
-    with_reference_model: bool = True,         # whether the pre-training script should do forward passes with the reference model (i.e. the model at time step zero)
+    training_monitor :ModuleMonitor = None,             # added for the project. we montior activations, gradients and parameters during training
+    reference_model_type: str = None,                   # whether the pre-training script should do forward passes with a reference model. "init", "previous_step" or None to disable              
     with_advanced_activation_differences: bool = False, # whether to perform forward passes with the reference model using the intermediate activations of the main module
-    with_compile: bool = True,                # whether to compile the model
+    with_compile: bool = True,                          # whether to compile the model
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -197,7 +197,7 @@ def setup(
         eval,
         optimizer,
         training_monitor,
-        with_reference_model,
+        reference_model_type,
         with_advanced_activation_differences,
         with_compile,
         initialize_weights_fn,
@@ -221,7 +221,7 @@ def main(
     eval: EvalArgs,
     optimizer: Union[str, Dict],
     training_monitor :ModuleMonitor = None,
-    with_reference_model: bool = True,
+    reference_model_type: str = None,
     with_advanced_activation_differences = False,
     with_compile: bool = True,
     initialize_weights_fn: Optional[callable] = None,
@@ -232,6 +232,9 @@ def main(
         initialize_weights_fn = initialize_weights
 
     validate_args(train, eval, initial_checkpoint_dir, resume)
+    with_reference_model = reference_model_type is not None
+    if with_reference_model:
+        assert reference_model_type in ["init", "previous_step"], f"Invalid reference model type: {reference_model_type}"
 
     if fabric.global_rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -350,6 +353,7 @@ def main(
         eval,
         training_monitor,
         reference_model,
+        reference_model_type,
         get_lr_fn,
         use_pytorch_profiler)
 
@@ -389,6 +393,7 @@ def fit(
     eval: EvalArgs,
     training_monitor :ModuleMonitor = None,
     reference_model: Optional[nn.Module] = None,
+    reference_model_type: str = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
 ) -> None:
@@ -552,7 +557,17 @@ def fit(
                 training_monitor.monitor_gradients()
 
             training_monitor.aggregate_step()
+
+            # if we are monitoring the next step with reference model type "previous_step", we need to load the current model weights into the reference model
+            if training_monitor.is_step_monitored(training_monitor.step+1) and reference_model is not None and reference_model_type == "previous_step":
+                if isinstance(fabric.strategy, FSDPStrategy):
+                    with FullyShardedDataParallel.summon_full_params(model):
+                        with FullyShardedDataParallel.summon_full_params(reference_model):
+                            reference_model.load_state_dict(model.state_dict())
+                else:
+                    reference_model.load_state_dict(model.state_dict())
             
+            # take the gradient step, then zero the gradients
             optimizer.step()
             optimizer.zero_grad()
             state["step_count"] += 1
