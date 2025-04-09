@@ -154,8 +154,9 @@ if __name__ == "__main__":
     activation_metrics = {
         "l2norm": l2_norm,
     }
-    parameter_metrics = {
-        "l2norm": l2_norm,
+    parameter_metrics_spec = {
+        r"*": {"l2norm": l2_norm},                                  # l2 norm for all parameters
+        r"*.norm_*": {"opnorm": lambda x: x.abs().max(dim=-1)}      # operator norm for normalization layers (the maximum parameter value)
     }
     gradient_metrics = {
         "l2norm": l2_norm,
@@ -169,7 +170,7 @@ if __name__ == "__main__":
                                        monitor=args.monitor,
                                        logger=logging.getLogger("ModuleMonitor"),
                                        activation_metrics=activation_metrics,
-                                       parameter_metrics=parameter_metrics,
+                                       parameter_metrics_spec=parameter_metrics_spec,
                                        gradient_metrics=gradient_metrics,
                                        activation_difference_metrics=activation_difference_metrics,
                                        cpu_offload=args.monitor_cpu_offload)

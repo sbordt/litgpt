@@ -7,6 +7,7 @@ from numbers import Number
 import logging
 import sys
 from contextlib import contextmanager
+import re
 
 
 def format_module_name(name: str):
@@ -121,9 +122,11 @@ class ModuleMonitor:
                  step_start = 0,
                  monitor = True,
                  activation_metrics=None,
-                 parameter_metrics=None,
-                 gradient_metrics=None,
                  activation_difference_metrics=None,
+                 parameter_metrics=None,                    # metric that are applied to all parameters
+                 parameter_metrics_spec=None,               # metrics that are applied to specific parameters based on a regular expression or a custom strategy
+                 parameter_difference_metrics_spec=None,    # metrics that are applied to specific parameter differences based on a regular expression or a custom strategy
+                 gradient_metrics=None,
                  logger=None,
                  cpu_offload=False): 
         """Init the training monitor."""
@@ -146,10 +149,17 @@ class ModuleMonitor:
         self.monitor_step = False # do we monitor the current gradient step?
         self.log_dict = {} # a dict to log the parameters, activations, etc. of all gradient steps. maps the step number to the log dict of that step.
 
-        self.activation_metrics = activation_metrics if activation_metrics is not None else {"l2norm": l2_norm}
-        self.parameter_metrics = parameter_metrics if parameter_metrics is not None else {"l2norm": l2_norm}
-        self.gradient_metrics = gradient_metrics if gradient_metrics is not None else {"l2norm": l2_norm}
-        self.activation_difference_metrics = activation_difference_metrics if activation_difference_metrics is not None else {"l2norm": lambda x, y: l2_norm(x - y)}
+        self.activation_metrics = activation_metrics if activation_metrics is not None else {}
+        self.activation_difference_metrics = activation_difference_metrics if activation_difference_metrics is not None else {}
+        self.parameter_metrics = parameter_metrics if parameter_metrics is not None else {}
+        self.parameter_difference_metrics_spec = parameter_difference_metrics_spec if parameter_difference_metrics_spec is not None else {}
+        self.gradient_metrics = gradient_metrics if gradient_metrics is not None else {}
+
+        # compile regular expressions
+        self.parameter_metrics_spec = {}
+        for regex, metrics in parameter_metrics_spec.items():
+            compiled_re = re.compile(regex)
+            self.parameter_metrics_spec[compiled_re] = metrics
 
         # Initialize logger
         if logger is None:
@@ -682,25 +692,36 @@ class ModuleMonitor:
     #################################################################
     # Logging of parameters
     #################################################################
+    def _monitor_parameter(self, name, param, metric_fn, metric_name):
+        """Low-level function that logs a metric for a parameter."""
+        # apply the metrics to the flattened parameter tensor
+        result = metric_fn(param.flatten())
+
+        # if result is a tensor, apply item()
+        if isinstance(result, torch.Tensor):
+            result = result.item()
+
+        # Create log entry
+        log_entry = f"parameter/{format_module_name(name)}/{metric_name}"
+        self.log_scalar(log_entry, result)
+        self.logger.debug(f"Step {self.step}: Monitored parameter %s with shape %s with %s %s (logged as %s)", name, param.shape, metric_name, result, log_entry)
+
+
     def monitor_parameters(self):
+        """Monitor the parameters of the monitored module. This is usually called after a gradient step is done."""
         if not self.is_monitoring():
             return
         
         for name, param in self.module.named_parameters():
-
-            # log the different metrics (most likely the frobenius norm of the parameters)
+            # log metrics that apply to all parameters
             for metric_name, metric_fn in self.parameter_metrics.items():
-                # we apply the metrics to the flattened parameter tensor
-                result = metric_fn(param.flatten())
-
-                # if result is a tensor, apply item()
-                if isinstance(result, torch.Tensor):
-                    result = result.item()
-
-                # Create log entry
-                log_entry = f"parameter/{format_module_name(name)}/{metric_name}"
-                self.log_scalar(log_entry, result)
-                self.logger.debug(f"Step {self.step}: Monitored parameter %s with shape %s with %s %s (logged as %s)", name, param.shape, metric_name, result, log_entry)
+                self._monitor_parameter(name, param, metric_fn, metric_name)
+                
+            # log metrics that specify via a regular expression that they only apply to specific named parameters
+            for compiled_re, metrics_dict in self.parameter_metrics_spec.items():
+                if compiled_re.match(name):
+                    for metric_name, metric_fn in metrics_dict.items():
+                        self.monitor_parameter(name, param, metric_fn, metric_name)
 
             # the difference in l2 norm to the reference module
             if self.reference_module is not None:
