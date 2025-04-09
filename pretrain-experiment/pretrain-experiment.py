@@ -62,9 +62,8 @@ if __name__ == "__main__":
     parser.add_argument("--monitor", action="store_true", default=True)
     parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
     parser.add_argument("--monitor_interval", type=int, default=100)
-    parser.add_argument("--reference-model", action="str", default=None, help="compare activations to a reference model. 'init': compare to the model at initialization, 'previous_step': compare to the model at the previous gradient step")
-    parser.add_argument("--mointor-cpu-offload", action="store_true", default=True, 
-                    help="enable CPU offloading for the reference model") # TODO implement!
+    parser.add_argument("--reference_model", action="str", default=None, help="compare activations to a reference model. 'init': compare to the model at initialization, 'previous_step': compare to the model at the previous gradient step")
+    parser.add_argument("--mointor_cpu_offload", action="store_true", default=False, help="enable CPU offloading for the reference model")
     parser.add_argument("--advanced_activation_differences", action="store_true", default=False)
     # parameters of the pre-training run
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
@@ -86,10 +85,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     # pytorch options
     parser.add_argument("--use-pytorch-profiler", action="store_true", default=False)
-    parser.add_argument("--compile", action="store_true", default=False, 
-                    help="enable model compilation with torch.compile")
-    parser.add_argument("--no-compile", action="store_false", dest="compile",
-                    help="disable model compilation with torch.compile")
+    parser.add_argument("--compile", action="store_true", default=False, help="enable model compilation with torch.compile")
+    parser.add_argument("--no-compile", action="store_false", dest="compile", help="disable model compilation with torch.compile")
     args = parser.parse_args()
 
     logging.basicConfig(level=args.log_level)
@@ -174,7 +171,8 @@ if __name__ == "__main__":
                                        activation_metrics=activation_metrics,
                                        parameter_metrics=parameter_metrics,
                                        gradient_metrics=gradient_metrics,
-                                       activation_difference_metrics=activation_difference_metrics)
+                                       activation_difference_metrics=activation_difference_metrics,
+                                       cpu_offload=args.mointor_cpu_offload)
 
 
     # setup training from scratch with the given configuration

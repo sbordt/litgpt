@@ -317,13 +317,8 @@ def main(
     fabric.print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
     fabric.print(f"Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 
-    # THIS IS THE ORIGINAL LITGPT RESUME TRAINING CODE THAT WE ARE NOT USING (because it somehow failed for us)
-    #resume = find_resume_path(resume, out_dir)
-    #if resume:
-    #    fabric.print(f"Resuming training from {resume}")
-    #    fabric.load(resume, state)
-
-    resume = find_resume_path(resume, out_dir) # this is our own resume training code
+    # resume training, we load the model and optimizer state dicts, including the log_dict
+    resume = find_resume_path(resume, out_dir) 
     if resume:
         checkpoint = torch.load(resume, map_location='cpu')
         model.load_state_dict(checkpoint['model'])
