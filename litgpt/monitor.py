@@ -694,17 +694,21 @@ class ModuleMonitor:
     #################################################################
     def _monitor_parameter(self, name, param, metric_fn, metric_name):
         """Low-level function that logs a metric for a parameter."""
-        # apply the metrics to the flattened parameter tensor
-        result = metric_fn(param.flatten())
+        try:
+            # apply the metrics to the flattened parameter tensor
+            result = metric_fn(param.flatten())
 
-        # if result is a tensor, apply item()
-        if isinstance(result, torch.Tensor):
-            result = result.item()
+            # if result is a tensor, apply item()
+            if isinstance(result, torch.Tensor):
+                result = result.item()
 
-        # Create log entry
-        log_entry = f"parameter/{format_module_name(name)}/{metric_name}"
-        self.log_scalar(log_entry, result)
-        self.logger.debug(f"Step {self.step}: Monitored parameter %s with shape %s with %s %s (logged as %s)", name, param.shape, metric_name, result, log_entry)
+            # Create log entry
+            log_entry = f"parameter/{format_module_name(name)}/{metric_name}"
+            self.log_scalar(log_entry, result)
+            self.logger.debug(f"Step {self.step}: Monitored parameter %s with shape %s with %s %s (logged as %s)", name, param.shape, metric_name, result, log_entry)
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to monitor parameter {name} of shape {param.shape} with metric {metric_name}.") from e
 
 
     def monitor_parameters(self):
@@ -721,7 +725,7 @@ class ModuleMonitor:
             for compiled_re, metrics_dict in self.parameter_metrics_spec.items():
                 if compiled_re.match(name):
                     for metric_name, metric_fn in metrics_dict.items():
-                        self._monitor_parameter(name, param, metric_fn, metric_name)
+                        self._monitor_parameter(name, param, metric_fn, metric_name) # we put this in a try-catch block because it executes 
 
             # the difference in l2 norm to the reference module
             if self.reference_module is not None:
