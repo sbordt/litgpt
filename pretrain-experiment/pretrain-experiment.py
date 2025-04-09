@@ -1,7 +1,7 @@
 # run a pre-training experiment, optionally monitoring the training process
-import os
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
+#import os
+#os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 from litgpt.model import GPT, Config
 from litgpt.monitor import ModuleMonitor
