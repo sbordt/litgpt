@@ -224,8 +224,8 @@ def main(
     optimizer: Union[str, Dict],
     training_monitor :ModuleMonitor = None,
     reference_model_type: str = None,
-    with_activation_differences = False,
-    with_mup_coordinate_check = False,
+    with_activation_differences: bool = False,
+    with_mup_coordinate_check: bool = False,
     with_compile: bool = True,
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
@@ -237,6 +237,9 @@ def main(
     validate_args(train, eval, initial_checkpoint_dir, resume)
     assert reference_model_type in ["init", "previous_step"], f"Invalid reference model type: {reference_model_type}"
     with_reference_model = with_activation_differences or with_mup_coordinate_check
+    print(f"with_reference_model: {with_reference_model}")
+    print(f"with_activation_differences: {with_activation_differences}")
+    print(f"with_mup_coordinate_check: {with_mup_coordinate_check}")
     
     if fabric.global_rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
