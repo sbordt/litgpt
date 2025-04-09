@@ -63,7 +63,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
     parser.add_argument("--monitor_interval", type=int, default=100)
     parser.add_argument("--reference_model", type=str, default=None, help="compare activations to a reference model. 'init': compare to the model at initialization, 'previous_step': compare to the model at the previous gradient step")
-    parser.add_argument("--mointor_cpu_offload", action="store_true", default=False, help="enable CPU offloading for the reference model")
+    parser.add_argument("--monitor_cpu_offload", action="store_true", default=False, help="enable CPU offloading for the reference model")
     parser.add_argument("--advanced_activation_differences", action="store_true", default=False)
     # parameters of the pre-training run
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
@@ -172,7 +172,7 @@ if __name__ == "__main__":
                                        parameter_metrics=parameter_metrics,
                                        gradient_metrics=gradient_metrics,
                                        activation_difference_metrics=activation_difference_metrics,
-                                       cpu_offload=args.mointor_cpu_offload)
+                                       cpu_offload=args.monitor_cpu_offload)
 
 
     # setup training from scratch with the given configuration
