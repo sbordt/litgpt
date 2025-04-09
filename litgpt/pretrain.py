@@ -85,8 +85,9 @@ def setup(
     logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
     training_monitor :ModuleMonitor = None,             # added for the project. we montior activations, gradients and parameters during training
-    reference_model_type: str = None,                   # whether the pre-training script should do forward passes with a reference model. "init", "previous_step" or None to disable              
-    with_advanced_activation_differences: bool = False, # whether to perform forward passes with the reference model using the intermediate activations of the main module
+    reference_model_type: str = None,                   # "init", "previous_step"        
+    with_activation_differences = False,
+    with_mup_coordinate_check = False,
     with_compile: bool = True,                          # whether to compile the model
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
@@ -198,7 +199,8 @@ def setup(
         optimizer,
         training_monitor,
         reference_model_type,
-        with_advanced_activation_differences,
+        with_activation_differences,
+        with_mup_coordinate_check,
         with_compile,
         initialize_weights_fn,
         get_lr_fn,
@@ -222,7 +224,8 @@ def main(
     optimizer: Union[str, Dict],
     training_monitor :ModuleMonitor = None,
     reference_model_type: str = None,
-    with_advanced_activation_differences = False,
+    with_activation_differences = False,
+    with_mup_coordinate_check = False,
     with_compile: bool = True,
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
@@ -232,10 +235,9 @@ def main(
         initialize_weights_fn = initialize_weights
 
     validate_args(train, eval, initial_checkpoint_dir, resume)
-    with_reference_model = reference_model_type is not None
-    if with_reference_model:
-        assert reference_model_type in ["init", "previous_step"], f"Invalid reference model type: {reference_model_type}"
-
+    assert reference_model_type in ["init", "previous_step"], f"Invalid reference model type: {reference_model_type}"
+    with_reference_model = with_activation_differences or with_mup_coordinate_check
+    
     if fabric.global_rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -247,25 +249,28 @@ def main(
         reference_model = GPT(config) if with_reference_model else None
 
     initialize_weights_fn(fabric, model, n_layer=config.n_layer, n_embd=config.n_embd)
-    if reference_model is not None:
-        reference_model.load_state_dict(model.state_dict()) # the reference model is the model with the weights at time step zero
 
     if train.tie_embeddings:
-        model.transformer.wte.weight = model.lm_head.weight # TODO need this for reference model, too
+        model.transformer.wte.weight = model.lm_head.weight
     if train.max_seq_length:
         model.max_seq_length = train.max_seq_length
+
+    if reference_model is not None:
+        reference_model.load_state_dict(model.state_dict()) # initialize the reference model to the model at time step zero
 
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters: {num_parameters(model):,}")
 
     # register hooks to monitor the training process (according to torch.compile docs, this should happen before compilation)
     training_monitor.set_module(model)
-    training_monitor.set_reference_module(reference_model)
 
-    if with_reference_model and with_advanced_activation_differences:
+    if with_activation_differences:
+        training_monitor.set_reference_module(reference_model)
+
+    if with_mup_coordinate_check:
         if fabric.world_size != 1:
-            raise ValueError("Advanced activation difference monitoring is only supported for single-GPU training")
-        training_monitor.monitor_activation_differences(reference_model)
+            raise ValueError("muP coordinate check is only supported for single-GPU training")
+        training_monitor.mup_coordinate_check(reference_model)
 
     # torch.compile the model and setup for distributed training
     if with_compile:
@@ -349,6 +354,8 @@ def main(
         training_monitor,
         reference_model,
         reference_model_type,
+        with_activation_differences,
+        with_mup_coordinate_check,
         get_lr_fn,
         use_pytorch_profiler)
 
@@ -389,6 +396,8 @@ def fit(
     training_monitor :ModuleMonitor = None,
     reference_model: Optional[nn.Module] = None,
     reference_model_type: str = None,
+    with_activation_differences = False,
+    with_mup_coordinate_check = False,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
 ) -> None:
@@ -485,7 +494,7 @@ def fit(
 
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
 
-        # monitored forward pass with a reference model. we divide the batch into two parts to avoid GPU OOM
+        # activation differences versus the reference model. we divide the batch into two parts to avoid GPU OOM
         if training_monitor.is_monitoring() and reference_model is not None and train.micro_batch_size > 1:
             input_ids_first_one = input_ids[:train.micro_batch_size//2]
             input_ids_second_one = input_ids[train.micro_batch_size//2:]
@@ -494,9 +503,10 @@ def fit(
             
             loss_sum = None
             for local_input_ids, local_targets in [(input_ids_first_one, targets_first_one), (input_ids_second_one, targets_second_one)]:
-                with fabric.no_backward_sync(model, enabled=is_accumulating):                                      
-                    with torch.no_grad():   
-                        _ = reference_model(local_input_ids)     
+                with fabric.no_backward_sync(model, enabled=is_accumulating):
+                    if with_activation_differences:                                      
+                        with torch.no_grad():   
+                            _ = reference_model(local_input_ids)     
 
                     logits = model(local_input_ids)
                     loss = chunked_cross_entropy(logits, local_targets)

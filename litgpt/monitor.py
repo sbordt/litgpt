@@ -503,20 +503,21 @@ class ModuleMonitor:
             )
 
     #######################################################################################
-    # Monitoring of activation differences with  requires additional forward passes.
+    # muP coordinate check
     #######################################################################################
-    def monitor_activation_differences(self, comparison_model: torch.nn.Module):
-        """Mointor the difference in activations between the monitored module and a comparison module. This can be used to perform a muP coordinate check.
+    def mup_coordinate_check(self, comparison_model: torch.nn.Module):
+        """Perform a muP coordinate check.
 
-        When this function is called by the user, the training monitor performs additional computations to compare the intermediate activations of the monitored module and the comparison module.
+        When this function is called by the user, the training monitor performs additional computations to compare the activations of the monitored module and the provied comparison module.
 
         During a forward pass of the monitored module, we pass the input of every module also into the corresponding module of the comparison model and monitor the difference of the outputs.
         This means that we perform a forward operation in the comparison model with the **intermediate** input activations of the monitored module.
+        
         The comparison module must have the same architecture as the monitored module. It can, but does not have to be the reference module.
 
         The comparison model must be set before the forward pass of the monitored module.
         
-        Note: This function only works if the monitored module and the comparison module are on the same (single) device. This does NOT work with FSDP.
+        Note: The current implmentation assumes that the monitored module and the comparison module are on the same (single) device. So we do not support FSDP et al.
         """
         if self.module is None:
             raise ValueError("No module to monitor. Please set the module first.")
@@ -561,10 +562,10 @@ class ModuleMonitor:
                 result = metric_fn(output, comp_output.detach())
 
                 # monitor the metric
-                log_entry = f"advanced_activation_difference/{module_name}/{metric_name}"
+                log_entry = f"mup_coordinate_check/{module_name}/{metric_name}"
                 self.log_tensor(log_entry, result)
 
-            self.logger.debug(f"Step {self.step}: Monitored advanced activation differences of module %s with shape %s", module_name, output.shape)
+            self.logger.debug(f"Step {self.step}: Monitored mup coordinate check activation differences of module %s with shape %s", module_name, output.shape)
 
         return hook
 

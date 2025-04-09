@@ -62,9 +62,10 @@ if __name__ == "__main__":
     parser.add_argument("--monitor", action="store_true", default=True)
     parser.add_argument("--no-monitor", action="store_false", dest="monitor", help="global toggle to turn off all monitoring")
     parser.add_argument("--monitor_interval", type=int, default=100)
-    parser.add_argument("--reference_model", type=str, default=None, help="compare activations to a reference model. 'init': compare to the model at initialization, 'previous_step': compare to the model at the previous gradient step")
+    parser.add_argument("--reference_model", type=str, default="init", help="compare activations to a reference model. 'init': compare to the model at initialization, 'previous_step': compare to the model at the previous gradient step")
+    parser.add_argument("--activation_differences", action="store_true", default=False)
+    parser.add_argument("--mup_coordinate_check", action="store_true", default=False)
     parser.add_argument("--monitor_cpu_offload", action="store_true", default=False, help="enable CPU offloading for the reference model")
-    parser.add_argument("--advanced_activation_differences", action="store_true", default=False)
     # parameters of the pre-training run
     parser.add_argument("--model", type=str, default="pythia-14m", help="model to train")
     parser.add_argument("--norm_class_name", type=str, default="LayerNorm", help="Set to LayerNorm or RMSNorm")
@@ -216,7 +217,8 @@ if __name__ == "__main__":
         seed = args.seed,
         training_monitor = training_monitor,
         reference_model_type = args.reference_model,
-        with_advanced_activation_differences = args.advanced_activation_differences,
+        with_activation_differences = args.activation_differences,
+        with_mup_coordinate_check = args.mup_coordinate_check,
         with_compile = args.compile,
         use_pytorch_profiler = args.use_pytorch_profiler,
         initialize_weights_fn = initialize_weights_fn,
