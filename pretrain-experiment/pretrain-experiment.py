@@ -150,13 +150,16 @@ if __name__ == "__main__":
     def l2_norm(tensor: torch.Tensor) -> torch.Tensor:
         """we compute the metric along the last dimension, which is the embedding dimension. then we just return the remaining tensor of shape BxS (input shape is BxSxE)"""
         return torch.linalg.vector_norm(tensor, ord=2, dim=-1)
+    def matrix_opnorm(tensor: torch.Tensor) -> torch.Tensor:
+        return torch.linalg.matrix_norm(tensor, ord=2)
 
     activation_metrics = {
         "l2norm": l2_norm,
     }
     parameter_metrics_spec = {
-        r"*": {"l2norm": l2_norm},                                  # l2 norm for all parameters
-        r"*.norm_*": {"opnorm": lambda x: x.abs().max(dim=-1)}      # operator norm for normalization layers (the maximum parameter value)
+        r".*": {"l2norm": l2_norm},                                      # l2 norm for all parameters
+        r".*.norm_.*": {"opnorm": lambda x: x.abs().max(dim=-1)},         # operator norm for normalization layers (the maximum parameter value)
+        r".*mlp\.(fc|proj)\.weight.*" : {"opnorm": matrix_opnorm},       # operator norm for linear layers   
     }
     gradient_metrics = {
         "l2norm": l2_norm,
