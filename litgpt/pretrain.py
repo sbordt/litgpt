@@ -237,9 +237,6 @@ def main(
     validate_args(train, eval, initial_checkpoint_dir, resume)
     assert reference_model_type in ["init", "previous_step"], f"Invalid reference model type: {reference_model_type}"
     with_reference_model = with_activation_differences or with_mup_coordinate_check
-    print(f"with_reference_model: {with_reference_model}")
-    print(f"with_activation_differences: {with_activation_differences}")
-    print(f"with_mup_coordinate_check: {with_mup_coordinate_check}")
     
     if fabric.global_rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -661,6 +658,7 @@ def fit(
         fabric.log_dict(metrics, step=state["iter_num"])
         fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
 
+    torch.cuda.empty_cache()
 
 
 @torch.no_grad()
