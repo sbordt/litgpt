@@ -1,4 +1,7 @@
 # run a pre-training experiment, optionally monitoring the training process
+import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 
 from litgpt.model import GPT, Config
 from litgpt.monitor import ModuleMonitor
@@ -20,11 +23,10 @@ from DclmData import DclmData
 
 import math
 
-import torch
-torch.set_float32_matmul_precision('high')  
-
 import logging
 
+import torch
+torch.set_float32_matmul_precision('high')  
 
 # learning rate decay scheduler (cosine with linear warmup)
 def get_lr(learning_rate: float, it: int, warmup_iters: int, max_iters: int, min_lr: float, step: int) -> float:
