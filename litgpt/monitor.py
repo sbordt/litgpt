@@ -352,7 +352,7 @@ class ModuleMonitor:
 
         # verify that value is a number
         if not isinstance(value, Number):
-            raise ValueError("Value must be a number.")
+            raise ValueError("log_scalar: The provided value is not a scalar. Key: %s, Value: %s", key, value)
         
         if key in self.log_dict[self.step]: # log different values of the same key in a list
             if not isinstance(self.log_dict[self.step][key], list):
