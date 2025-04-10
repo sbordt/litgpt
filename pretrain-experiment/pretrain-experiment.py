@@ -78,6 +78,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_seq_length", type=int, default=512)
     parser.add_argument("--global_batch_size", type=int, default=512)
     parser.add_argument("--micro_batch_size", type=int, default=8)
+    parser.add_argument("--optimizer", type=str, default="AdamW", help="AdamW or SGD")
     parser.add_argument("--lr", type=float, default=0.0006)
     parser.add_argument('--mup', action='store_true', help='Enable MUP (Maximal Update Parameterization)')
     parser.add_argument("--mup_input_alpha", type=float, default=1)
@@ -102,6 +103,8 @@ if __name__ == "__main__":
         raise ValueError("Run-id must be provided for multi-GPU training")
     if args.resume and args.run_id is None:
         raise ValueError("Run-id must be provided for resuming training")
+    if not args.optimizer in ["AdamW", "SGD"]:
+        raise ValueError("Optimizer must be AdamW or SGD")
     
     # setup a shared directory for all experiments with the same name
     experiment_name = args.experiment_name
@@ -145,6 +148,24 @@ if __name__ == "__main__":
 
     # weight initialization for mup or sp
     initialize_weights_fn = initialize_mup_weights if args.mup else initialize_standard_weights
+
+    # optimizer configuration
+    optimizer_args = {
+            "class_path": "torch.optim.AdamW",
+            "init_args": {
+                "lr": args.lr,
+                "betas": (0.9, 0.95),
+                "weight_decay": 0.1,
+            }
+        }
+    if args.optimizer == "SGD":
+        optimizer_args = {
+            "class_path": "torch.optim.SGD",
+            "init_args": {
+                "lr": args.lr,
+                "weight_decay": 0.0,
+            }
+        }
 
     # dataset
     data = DclmData(data_path=Path(args.data_dir), seed=args.data_seed)
@@ -202,14 +223,7 @@ if __name__ == "__main__":
             lr_warmup_steps=700,
             tie_embeddings=args.tie_embeddings,
         ),
-        optimizer = {
-            "class_path": "torch.optim.AdamW",
-            "init_args": {
-                "lr": args.lr,
-                "betas": (0.9, 0.95),
-                "weight_decay": 0.1,
-            }
-        },
+        optimizer = optimizer_args,
         eval = EvalArgs(
             interval=1000,
             max_iters=100000, # use the entire validation set
