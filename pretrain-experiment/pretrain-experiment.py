@@ -59,6 +59,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/dclm-baseline-1.0-tokenized")
     parser.add_argument("--save_interval", type=int, default=1000)
     parser.add_argument("--resume", action="store_true", default=False, help="resume training from the most recent checkpoint. the checkpoint needs to exist.")
+    parser.add_argument("--auto-cancel", action="store_true", default=False, help="enable auto-cancel for the job. this will cancel the job if the validation loss is ever larger than 11.")
     parser.add_argument("--log-level", type=str, default="INFO", help="logging level")
     # monitoring parameters
     parser.add_argument("--monitor", action="store_true", default=True)
@@ -211,6 +212,7 @@ if __name__ == "__main__":
         data = data,
         tokenizer_dir=None,
         resume=args.resume,
+        auto_cancel=args.auto_cancel,
         train = TrainArgs(
             save_interval=args.save_interval,
             log_interval=1,

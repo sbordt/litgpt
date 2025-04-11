@@ -65,6 +65,7 @@ def setup(
     precision: Literal["bf16-true", "bf16-mixed", "32-true", None] = None,
     initial_checkpoint_dir: Optional[Path] = None,
     resume: Union[bool, Literal["auto"], Path] = False,
+    auto_cancel: bool = False,
     data: Optional[DataModule] = None,
     train: TrainArgs = TrainArgs(
         save_interval=1000,
@@ -189,6 +190,7 @@ def setup(
         seed,
         initial_checkpoint_dir,
         resume,
+        auto_cancel,
         config,
         data,
         out_dir,
@@ -214,6 +216,7 @@ def main(
     seed: int,
     initial_checkpoint_dir: Optional[Path],
     resume: Union[bool, Literal["auto"], Path],
+    auto_cancel: bool,
     config: Config,
     data: DataModule,
     out_dir: Path,
@@ -357,7 +360,8 @@ def main(
         with_activation_differences,
         with_mup_coordinate_check,
         get_lr_fn,
-        use_pytorch_profiler)
+        use_pytorch_profiler,
+        auto_cancel)
 
     # Save final checkpoint
     save_checkpoint(fabric, state, tokenizer_dir, out_dir / "final" / "lit_model.pth")
@@ -400,6 +404,7 @@ def fit(
     with_mup_coordinate_check = False,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
+    auto_cancel: bool = False,
 ) -> None:
     if get_lr_fn is None:
         get_lr_fn = get_lr
@@ -632,6 +637,11 @@ def fit(
             training_monitor.log_scalars(metrics) 
             fabric.log_dict(metrics, step=state["step_count"])
             fabric.barrier()
+
+            # auto-cancel
+            if auto_cancel and val_loss > 11:
+                fabric.print(f"Auto-canceling training due to high validation loss {val_loss:.4f}.")
+                raise SystemExit(1)
  
         if (train.save_interval is not None and not is_accumulating and state["step_count"] % train.save_interval == 0) or (state["step_count"] == 0 and state["iter_num"] == 1):
             checkpoint_dir = out_dir / f"step-{state['step_count']:08d}" 
