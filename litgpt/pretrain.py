@@ -537,51 +537,55 @@ def fit(
             training_monitor.clear_reference_activations()
 
         if not is_accumulating:
-            if fabric.world_size > 1 and fabric.global_rank == 0 and training_monitor.is_monitoring(): # FSDP requires parameter and gradient gathering for monitoring (rank0 only)
-                if reference_model is not None:
-                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True): # gather both model and reference model parameters
-                        with FullyShardedDataParallel.summon_full_params(reference_model):
-                                training_monitor.monitor_parameters()                       
-                                training_monitor.monitor_gradients(before_clip=True)
-                else:
-                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True): # gather only model parameters
-                        training_monitor.monitor_parameters()
-                        training_monitor.monitor_gradients(before_clip=True)
-            else:
-                training_monitor.monitor_parameters()
+            # if the reference model type is previous_step, we need to temporarily save the current model weight
+            if reference_model_type == "previous_step":
+                raise NotImplementedError("Reference model type 'previous_step' is not implemented yet.")
+
+            # monitor gradients before clip
+            if fabric.world_size == 1:
                 training_monitor.monitor_gradients(before_clip=True)
+            elif fabric.global_rank == 0 and training_monitor.is_monitoring(): # FSDP
+                with FullyShardedDataParallel.summon_full_params(model, with_grads=True, rank0_only=True): 
+                        training_monitor.monitor_gradients(before_clip=True)
             
+            # clip gradients
             grad_norm = fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
             if grad_norm is not None:
                 training_monitor.log_scalars({"grad_norm": grad_norm})
 
-            if fabric.world_size > 1 and fabric.global_rank == 0 and training_monitor.is_monitoring(): # same as above but after gradient clipping
-                if reference_model is not None:
-                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True):
-                        with FullyShardedDataParallel.summon_full_params(reference_model):                    
-                                training_monitor.monitor_gradients()
-                else:
-                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True): 
-                        training_monitor.monitor_gradients()
-            else:
+            # take gradient step
+            optimizer.step()
+
+            # monitor gradients and model parameters
+            if fabric.world_size == 1:
                 training_monitor.monitor_gradients()
+                training_monitor.monitor_parameters()
+            elif fabric.global_rank == 0 and training_monitor.is_monitoring(): # FSDP
+                if reference_model is not None:
+                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True, rank0_only=True):
+                        with FullyShardedDataParallel.summon_full_params(reference_model, rank0_only=True):                    
+                            training_monitor.monitor_gradients()
+                            training_monitor.monitor_parameters()
+                else:
+                    with FullyShardedDataParallel.summon_full_params(model, with_grads=True, rank0_only=True): 
+                        training_monitor.monitor_gradients()
+                        training_monitor.monitor_parameters()
 
             training_monitor.aggregate_step()
 
             # if we are monitoring the next step with reference model type "previous_step", we need to load the current model weights into the reference model
-            if training_monitor.is_step_monitored(training_monitor.step+1) and reference_model is not None and reference_model_type == "previous_step":
-                if isinstance(fabric.strategy, FSDPStrategy):
-                    with FullyShardedDataParallel.summon_full_params(model):
-                        with FullyShardedDataParallel.summon_full_params(reference_model):
-                            reference_model.load_state_dict(model.state_dict())
-                else:
-                    reference_model.load_state_dict(model.state_dict())
+            #if training_monitor.is_step_monitored(training_monitor.step+1) and reference_model is not None and reference_model_type == "previous_step":
+            #    if isinstance(fabric.strategy, FSDPStrategy):
+            #        with FullyShardedDataParallel.summon_full_params(model):
+            #            with FullyShardedDataParallel.summon_full_params(reference_model):
+            #                reference_model.load_state_dict(model.state_dict())
+            #    else:
+            #        reference_model.load_state_dict(model.state_dict())
             
-            # take the gradient step, then zero the gradients
-            optimizer.step()
+            # zero gradients
             optimizer.zero_grad()
-            state["step_count"] += 1
 
+            state["step_count"] += 1
             if use_pytorch_profiler:
                 profiler.step()
 
