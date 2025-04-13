@@ -177,6 +177,10 @@ class ModuleMonitor:
 
     def set_module(self, module):
         """Set the module that we want to monitor. This function will register forward hooks on the module to monitor the activations. It will also remove any previously set module and reference module."""
+        if not self.monitor:
+            self.logger.debug(f"Step {self.step}: Monitoring is disabled. Not setting module.")
+            return
+        
         # remove any previous reference module
         self.remove_reference_module()
         
@@ -209,6 +213,10 @@ class ModuleMonitor:
     def set_reference_module(self, module):
         """Set the reference module. The training monitor compares the activations and parameters of the monitored module with the reference module. 
         The reference module must take a forward pass with the same input as the monitored module BEFORE the monitored module takes a forward pass."""
+        if not self.monitor:
+            self.logger.debug(f"Step {self.step}: Monitoring is disabled. Not setting reference module.")
+            return
+        
         # remove any previous reference module
         self.remove_reference_module()
 
@@ -712,7 +720,7 @@ class ModuleMonitor:
 
 
     def monitor_parameters(self):
-        """Monitor the parameters of the monitored module. This is usually called after a gradient step is done."""
+        """Monitor the parameters of the monitored module."""
         if not self.is_monitoring():
             return
         
@@ -734,7 +742,31 @@ class ModuleMonitor:
                 log_entry = f"parameter_difference/{format_module_name(name)}/l2norm"
                 diff = (param - ref_param).norm(p='fro').item()
                 self.log_scalar(log_entry, diff)
-    
+
+
+    #################################################################
+    # Logging of optimizer stats (momentum, variance, etc.)
+    #################################################################
+    def monitor_optimizer(self, optimizer: torch.optim.Optimizer):
+        """Monitor optimizer statistics (momentum, variance, etc.)."""
+        if not self.is_monitoring():
+            return
+
+        # logging the optimizer state is surprisingly involved
+        # if we are training on a single gpu, then the optimizer state dict associates model parameters with integer IDs 
+        # (see https://pytorch.org/docs/stable/generated/torch.optim.Optimizer.state_dict.html#torch.optim.Optimizer.state_dict)
+        # in this case we jointly zip over the optimizer state dict and the model parameters to get a 1:1 assocation. 
+        # if we are training with FDSP, the user needs to gather all optimizer parameters on rank0 (assuming this is where monitor_optimizer is called)
+        # in this case, we don't have integer IDs but full parameter names (see full_optim_state_dict in https://pytorch.org/docs/stable/fsdp.html)
+        # as an additional complication, the keys in the optimizer state dict depend on the optimizer
+
+        optimizer_state = optimizer.state_dict()['state']
+        for optim_state, (name, _) in zip(optimizer_state.values(), self.module.named_parameters()):
+            for key, value in optim_state.items():
+                if key == "step":
+                    continue
+                #log_entry = f"optimizer/{format_module_name(name)}/{metric_name}"
+                # what do we want to log here?
 
     #################################################################
     # Merge another log dict from a distributed traing run.
