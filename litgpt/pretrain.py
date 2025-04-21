@@ -15,6 +15,7 @@ from functools import partial
 from pathlib import Path
 from typing import Optional, Tuple, Union, Dict
 from contextlib import nullcontext
+import copy
 
 import lightning as L
 import torch
@@ -499,7 +500,7 @@ def fit(
 
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices) != 0
 
-        # activation differences versus the reference model. we divide the batch into two parts to avoid GPU OOM
+        # activation differences versus the reference model. we divide the micro batch into two parts to avoid gpu oom
         if training_monitor.is_monitoring() and reference_model is not None and train.micro_batch_size > 1:
             input_ids_first_one = input_ids[:train.micro_batch_size//2]
             input_ids_second_one = input_ids[train.micro_batch_size//2:]
@@ -537,10 +538,6 @@ def fit(
             training_monitor.clear_reference_activations()
 
         if not is_accumulating:
-            # if the reference model type is previous_step, we need to temporarily save the current model weight
-            if reference_model_type == "previous_step":
-                raise NotImplementedError("Reference model type 'previous_step' is not implemented yet.")
-
             # monitor gradients before clip
             if fabric.world_size == 1:
                 training_monitor.monitor_gradients(before_clip=True)
@@ -552,9 +549,6 @@ def fit(
             grad_norm = fabric.clip_gradients(model, optimizer, max_norm=train.max_norm)
             if grad_norm is not None:
                 training_monitor.log_scalars({"grad_norm": grad_norm})
-
-            # take gradient step
-            optimizer.step()
 
             # monitor gradients and model parameters
             if fabric.world_size == 1:
@@ -573,16 +567,17 @@ def fit(
 
             training_monitor.aggregate_step()
 
-            # if we are monitoring the next step with reference model type "previous_step", we need to load the current model weights into the reference model
-            #if training_monitor.is_step_monitored(training_monitor.step+1) and reference_model is not None and reference_model_type == "previous_step":
-            #    if isinstance(fabric.strategy, FSDPStrategy):
-            #        with FullyShardedDataParallel.summon_full_params(model):
-            #            with FullyShardedDataParallel.summon_full_params(reference_model):
-            #                reference_model.load_state_dict(model.state_dict())
-            #    else:
-            #        reference_model.load_state_dict(model.state_dict())
-            
-            # zero gradients
+            # if we are monitoring the next step with reference model type "previous_step", we need to copy the current model weights into the reference model
+            if training_monitor.is_step_monitored(training_monitor.step+1) and reference_model is not None and reference_model_type == "previous_step":
+                if isinstance(fabric.strategy, FSDPStrategy):
+                    with FullyShardedDataParallel.summon_full_params(model):
+                        with FullyShardedDataParallel.summon_full_params(reference_model):
+                            reference_model.load_state_dict(model.state_dict())
+                else:
+                    reference_model.load_state_dict(model.state_dict())
+
+            # take the gradient step
+            optimizer.step()
             optimizer.zero_grad()
 
             state["step_count"] += 1

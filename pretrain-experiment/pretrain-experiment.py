@@ -181,26 +181,35 @@ if __name__ == "__main__":
     activation_metrics = {
         "l2norm": l2_norm,
     }
+    activation_difference_metrics = {
+        "l2norm": lambda x, y: l2_norm(x - y),
+    }
     parameter_metrics_spec = {
-        r".*": {"l2norm": lambda param: l2_norm(param.flatten())},                                             # l2 norm for all parameters
-        #r".*.norm_.*": {"opnorm": lambda param: param.abs().max(dim=-1).values},         # operator norm for normalization layers (the maximum parameter value)
-        #r".*mlp\.(fc|proj)\.weight.*" : {"opnorm": matrix_opnorm},              # operator norm for linear layers   
+        r".*": {"l2norm": lambda param: l2_norm(param.flatten())},                      # l2 norm for all parameters
+        r".*.norm_.*": {"opnorm": lambda param: param.abs().max(dim=-1).values},        # operator norm for normalization layers (the maximum parameter value)
+        r".*mlp\.(fc|proj)\.weight.*" : {"opnorm": matrix_opnorm},                      # operator norm for linear layers   
+    }
+    parameter_difference_metrics_spec = {
+        # frobenius norm of the weight updates
+        r".*" : {"l2norm": lambda param, ref_param: l2_norm((param-ref_param).flatten())},
+
+        # operator norm of the weight updates
+        r".*.norm_.*": {"opnorm": lambda param, ref_param: (param-ref_param).abs().max(dim=-1).values},   
+        r".*mlp\.(fc|proj)\.weight.*" : {"opnorm": lambda param, ref_param: matrix_opnorm(param-ref_param)},                        
     }
     gradient_metrics = {
         "l2norm": l2_norm,
     }
-    activation_difference_metrics = {
-        "l2norm": lambda x, y: l2_norm(x - y),
-    }
+
 
     # create the training monitor
     training_monitor = ModuleMonitor(monitor_interval=args.monitor_interval, 
                                        monitor=args.monitor,
                                        logger=logging.getLogger("ModuleMonitor"),
                                        activation_metrics=activation_metrics,
+                                       activation_difference_metrics=activation_difference_metrics,
                                        parameter_metrics_spec=parameter_metrics_spec,
                                        gradient_metrics=gradient_metrics,
-                                       activation_difference_metrics=activation_difference_metrics,
                                        cpu_offload=args.monitor_cpu_offload)
 
 

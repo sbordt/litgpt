@@ -140,7 +140,6 @@ class ModuleMonitor:
         self.reference_module_hooks = {}
         self.ignore_reference_module_activations = False
         self.reference_module_names = {}        # a mapping from modules to their names
-        self.reference_module_parameters = {}   # a mapping from parameter names to the parameters
         self.reference_module_activations = {}  # a mapping from module names to their activations
 
         self.monitor_interval = monitor_interval
@@ -152,7 +151,6 @@ class ModuleMonitor:
         self.activation_metrics = activation_metrics if activation_metrics is not None else {}
         self.activation_difference_metrics = activation_difference_metrics if activation_difference_metrics is not None else {}
         self.parameter_metrics = parameter_metrics if parameter_metrics is not None else {}
-        self.parameter_difference_metrics_spec = parameter_difference_metrics_spec if parameter_difference_metrics_spec is not None else {}
         self.gradient_metrics = gradient_metrics if gradient_metrics is not None else {}
 
         # compile regular expressions
@@ -160,6 +158,11 @@ class ModuleMonitor:
         for regex, metrics in parameter_metrics_spec.items():
             compiled_re = re.compile(regex)
             self.parameter_metrics_spec[compiled_re] = metrics
+
+        self.parameter_difference_metrics_spec = {}
+        for regex, metrics in parameter_difference_metrics_spec.items():
+            compiled_re = re.compile(regex)
+            self.parameter_difference_metrics_spec[compiled_re] = metrics
 
         # Initialize logger
         if logger is None:
@@ -234,10 +237,6 @@ class ModuleMonitor:
             if isinstance(m, MonitorMixin):
                 m.set_training_monitor(self, True)
 
-        # register the parameters of the reference module
-        for name, param in module.named_parameters():
-            self.reference_module_parameters[format_module_name(name)] = param
-
         # assert that the reference module names contains the same keys as the monitored module names
         assert set(self.module_names.values()) == set(self.reference_module_names.values()), "The reference module must have the same structure as the monitored module (there are modules with different names)."
 
@@ -256,7 +255,6 @@ class ModuleMonitor:
             hook.remove()
         self.reference_module_hooks = {}
         self.reference_module_names = {}
-        self.reference_module_parameters = {}
         self.reference_module_activations = {}
 
 
@@ -288,7 +286,7 @@ class ModuleMonitor:
     
 
     def is_step_monitored(self, step: int):
-        """Will we monitor the given step? Most useful to check if the next step will be monitored in case we need to do some setting up before the step."""
+        """Will we monitor the given step? Useful to check if a future step will be monitored."""
         if not self.monitor: # global toggle to turn off monitoring
             return False
         monitor_step = step % self.monitor_interval == 1
@@ -719,10 +717,34 @@ class ModuleMonitor:
             raise RuntimeError(f"Failed to monitor parameter {name} of shape {param.shape} with metric {metric_name}.") from e
 
 
+    def _monitor_parameter_difference(self, name, param, ref_param, metric_fn, metric_name):
+        """Low-level function that logs a metric for the difference between a parameter and its reference."""
+        try:
+            result = metric_fn(param, ref_param)
+
+            # if result is a tensor, apply item()
+            if isinstance(result, torch.Tensor):
+                result = result.item()
+
+            # Create log entry
+            log_entry = f"parameter_difference/{format_module_name(name)}/{metric_name}"
+            self.log_scalar(log_entry, result)
+            self.logger.debug(f"Step {self.step}: Monitored parameter difference %s with shape %s with %s %s (logged as %s)", name, param.shape, metric_name, result, log_entry)
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to monitor parameter difference {name} of shape {param.shape} with metric {metric_name}.") from e
+
+
     def monitor_parameters(self):
         """Monitor the parameters of the monitored module."""
         if not self.is_monitoring():
             return
+        
+        # collect the parameters of the reference module
+        reference_module_parameters = {}
+        if self.reference_module is not None and len(self.parameter_difference_metrics_spec) > 0:
+            for name, param in self.reference_module.named_parameters():
+                reference_module_parameters[name] = param
         
         for name, param in self.module.named_parameters():
             # log metrics that apply to all parameters
@@ -735,13 +757,18 @@ class ModuleMonitor:
                     for metric_name, metric_fn in metrics_dict.items():
                         self._monitor_parameter(name, param, metric_fn, metric_name) # we put this in a try-catch block because it executes 
 
-            # the difference in l2 norm to the reference module
+            # log metrics for the difference between the parameter and its reference
             if self.reference_module is not None:
-                key = format_module_name(name)
-                ref_param = self.reference_module_parameters[key]
-                log_entry = f"parameter_difference/{format_module_name(name)}/l2norm"
-                diff = (param - ref_param).norm(p='fro').item()
-                self.log_scalar(log_entry, diff)
+                if name in reference_module_parameters:
+                    ref_param = reference_module_parameters[name]
+                        
+                    # log metrics that specify via a regular expression that they only apply to specific named parameters
+                    for compiled_re, metrics_dict in self.parameter_difference_metrics_spec.items():
+                        if compiled_re.match(name):
+                            for metric_name, metric_fn in metrics_dict.items():
+                                self._monitor_parameter_difference(name, param, ref_param, metric_fn, metric_name)
+                else:
+                    self.logger.warning(f"Step {self.step}: Parameter %s not found in the reference module.", name)
 
 
     #################################################################
