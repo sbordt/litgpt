@@ -154,6 +154,9 @@ class ModuleMonitor:
         self.gradient_metrics = gradient_metrics if gradient_metrics is not None else {}
 
         # compile regular expressions
+        parameter_metrics_spec = parameter_metrics_spec if parameter_metrics_spec is not None else {}
+        parameter_difference_metrics_spec = parameter_difference_metrics_spec if parameter_difference_metrics_spec is not None else {}
+
         self.parameter_metrics_spec = {}
         for regex, metrics in parameter_metrics_spec.items():
             compiled_re = re.compile(regex)

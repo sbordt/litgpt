@@ -209,6 +209,7 @@ if __name__ == "__main__":
                                        activation_metrics=activation_metrics,
                                        activation_difference_metrics=activation_difference_metrics,
                                        parameter_metrics_spec=parameter_metrics_spec,
+                                        parameter_difference_metrics_spec=parameter_difference_metrics_spec,
                                        gradient_metrics=gradient_metrics,
                                        cpu_offload=args.monitor_cpu_offload)
 
