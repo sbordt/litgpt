@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Union, Dict
 from contextlib import nullcontext
 import copy
+import gc
 
 import lightning as L
 import torch
@@ -679,8 +680,10 @@ def fit(
         fabric.log_dict(metrics, step=state["iter_num"])
         fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
 
+    gc.collect()
+    torch.cuda.ipc_collect()
     torch.cuda.empty_cache()
-
+    
 
 @torch.no_grad()
 def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max_iters: int, verbose: bool = True) -> torch.Tensor:
