@@ -527,8 +527,9 @@ def fit(
                         loss_sum += loss.detach() / 2
 
                     if with_mup_coordinate_check:
-                        training_monitor.mup_coordinate_check(fabric.device)
-                        
+                        with fabric.autocast():
+                            training_monitor.mup_coordinate_check(fabric.device)
+
                 training_monitor.after_micro_batch()                                                                    
             running_loss.update(loss_sum)
 
@@ -541,7 +542,8 @@ def fit(
                 fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
                 if with_mup_coordinate_check:
-                    training_monitor.mup_coordinate_check(fabric.device)
+                    with fabric.autocast():
+                        training_monitor.mup_coordinate_check(fabric.device)
 
             running_loss.update(loss.detach())
             
