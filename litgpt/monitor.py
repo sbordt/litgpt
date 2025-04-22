@@ -586,14 +586,19 @@ class ModuleMonitor:
             return
         
         if self.reference_module is None:
-            raise ValueError("Reference module is required for muP coordinate check. Please set the reference module first.")
+            raise ValueError("Reference module is required for muP coordinate check.")
+
+        if len(self.module_inputs) == 0:
+            raise ValueError("No inputs found for the monitored module. Call setup_mup_coordinate_check and perform a forward pass before calling mup_coordinate_check.")
 
         # iterate over module to perform coordinate check
         comparison_modules = dict(self.reference_module.named_modules())
 
-        print("Number of saved inputs and outputs: ", len(self.module_inputs), len(self.module_outputs))
-
         for name, module in self.module.named_modules():
+            if not name in self.module_inputs:
+                # we only perform the mup coordinate check for modules that run "forward" / call their forward hooks (this excludes ModuleList / ModuleDict)
+                continue
+
             comparison_module = comparison_modules[name]
             name = format_module_name(name)
             comparison_output = self.reference_module_activations[name]
