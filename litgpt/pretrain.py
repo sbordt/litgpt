@@ -133,6 +133,9 @@ def setup(
     if tokenizer_dir is not None:
         tokenizer_dir = extend_checkpoint_dir(tokenizer_dir)
 
+    if with_mup_coordinate_check:   # mup coordinate check uses the computations from the forward pass of the reference model
+        with_activation_differences = True
+
     if model_config is None:
         # Support both model_name options: meta-llama/Meta-Llama-3-8B & Meta-Llama-3-8B
         try:
@@ -274,7 +277,7 @@ def main(
     if with_mup_coordinate_check:
         if fabric.world_size != 1:
             raise ValueError("muP coordinate check is only supported for single-GPU training")
-        training_monitor.mup_coordinate_check(reference_model)
+        training_monitor.setup_mup_coordinate_check(reference_model)
 
     # torch.compile the model and setup for distributed training
     if with_compile:
@@ -523,7 +526,9 @@ def fit(
                 else:
                     loss_sum += loss.detach() / 2
 
-                training_monitor.clear_reference_activations()                                                                    
+                if with_mup_coordinate_check:
+                    training_monitor.mup_coordinate_check(fabric.device)
+                training_monitor.after_micro_batch()                                                                    
             running_loss.update(loss_sum)
 
         # normal forward pass
@@ -535,7 +540,10 @@ def fit(
                 fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
             running_loss.update(loss.detach())
-            training_monitor.clear_reference_activations()
+            
+            if with_mup_coordinate_check:
+                training_monitor.mup_coordinate_check(fabric.device)
+            training_monitor.after_micro_batch()
 
         if not is_accumulating:
             # monitor gradients before clip

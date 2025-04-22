@@ -100,7 +100,7 @@ class ModuleMonitor:
     The reference module is another copy of the module, and we compare the activations and parameters of the monitored module with the reference module. 
     The reference module must take a forward pass with the same input as the monitored module BEFORE the monitored module takes a forward pass.
 
-    Mirco-batches are supported by allowing abitrarily many forward passes before after_forward is called. After_forward aggregates the statistics of the mini-batches. 
+    Mirco-batches are supported by allowing abitrarily many forward passes before aggregate_step is called. aggregate_step aggregates the statistics of the mini-batches. 
     If there is a reference module, the respective micro-batch of the refernce module must take place before the micro-batch of the monitored module.
 
     We use a simple convention for the keys under which different metrics are logged:
@@ -347,7 +347,7 @@ class ModuleMonitor:
         This is useful to monitor values like the final validation loss.
 
         A scalar value is first logged internally as an individual value to the given key.
-        If the same key is logged again, loggend values are stored in a list and subsquently aggregated by after_forward.
+        If the same key is logged again, loggend values are stored in a list and subsquently aggregated by aggregate_step.
         """
         if not self.is_monitoring() and not force:
             return
@@ -374,7 +374,7 @@ class ModuleMonitor:
     def log_tensor(self, key: str, tensor: torch.Tensor):
         """Monitor a torch.Tensor.
 
-        Tensors are stored in a list and aggregated by after_forward.
+        Tensors are stored in a list and aggregated by aggregate_step.
         
         Args:
             key (str): The key under which to log the tensor metrics.
@@ -484,8 +484,8 @@ class ModuleMonitor:
         return hook
     
 
-    def clear_reference_activations(self):
-        """Clear the reference module activations. To be called after a mini-batch is done."""
+    def after_micro_batch(self):
+        """To be called after a mini-batch is done. Cleanup of intermediate state."""
         self.reference_module_activations = {}
     
 
@@ -514,70 +514,101 @@ class ModuleMonitor:
     #######################################################################################
     # muP coordinate check
     #######################################################################################
-    def mup_coordinate_check(self, comparison_model: torch.nn.Module):
-        """Perform a muP coordinate check.
-
-        When this function is called by the user, the training monitor performs additional computations to compare the activations of the monitored module and the provied comparison module.
-
-        During a forward pass of the monitored module, we pass the input of every module also into the corresponding module of the comparison model and monitor the difference of the outputs.
-        This means that we perform a forward operation in the comparison model with the **intermediate** input activations of the monitored module.
-        
-        The comparison module must have the same architecture as the monitored module. It can, but does not have to be the reference module.
-
-        The comparison model must be set before the forward pass of the monitored module.
-        
-        Note: The current implmentation assumes that the monitored module and the comparison module are on the same (single) device. So we do not support FSDP et al.
-        """
-        if self.module is None:
-            raise ValueError("No module to monitor. Please set the module first.")
-
-        # validate that we can find all modules in the comparison model
-        modules = dict(self.module.named_modules())
-        comparison_modules = dict(comparison_model.named_modules())
-
-        for name in modules.keys(): 
-            if not name in comparison_modules:
-                raise ValueError(f"Module {name} not found in the comparison model.")
+    def _module_mup_coordinate_check(self, 
+                                     module_name: str, 
+                                     module_input: torch.Tensor,            # x_t
+                                     module_output: torch.Tensor,           # W_t x_t
+                                     comparison_output: torch.Tensor,       # W_0 x_0
+                                     comparison_module: torch.nn.Module):
             
-        # remove any previous activation_difference_hooks
-        for hook in self.activation_difference_hooks.values():
-            hook.remove()
-        self.activation_difference_hooks = {}
-            
-        # register hooks to perform the additional forward passes
-        for name in modules.keys():
-            mod = modules[name]
-            comp_mod = comparison_modules[name]
-            self.activation_difference_hooks[mod] = mod.register_forward_hook(self._get_activation_differences_forwad_hook(self.module_names[mod], comp_mod))
-         
+            # perform a forward pass in the comparison module, using the intermediate input from the monitored module (W_0 x_t)
+            with torch.no_grad():
+                self.ignore_reference_module_activations = True      # temporarily ignore reference module activation hooks (relevant if the comparison module is the reference module)
+                W0_xt = comparison_module(*module_input).detach()
+                self.ignore_reference_module_activations = False
 
-    def _get_activation_differences_forwad_hook(self, module_name : str, comp_mod: torch.nn.Module):
+            # Frobenious norm of (W_t-W_0) x_t            
+            result = l2_norm(module_output - W0_xt)
+            log_entry = f"mup_coordinate_check/{module_name}/(W_t-W_0)x_t/l2norm"
+            self.log_tensor(log_entry, result)
+
+            # Frobenious norm of W_0 (x_t-x_0)
+            result = l2_norm(W0_xt - comparison_output)
+            log_entry = f"mup_coordinate_check/{module_name}/W_0(x_t-x_0)/l2norm"
+            self.log_tensor(log_entry, result)
+
+            self.logger.debug(f"Step {self.step}: Performed mup coordinate check for module %s with shape %s", module_name, module_output.shape)
+
+
+    def _get_mup_forward_hook(self, module_name: str):
         def hook(module, input, output):
             if not self.is_monitoring():
                 return
-
-            # every part of the input that is a tensor needs to be detached from the computational graph
+            
+            # detach input and output from the computational graph
             input = (i.detach() if isinstance(i, torch.Tensor) else i for i in input)
+            output = output.detach()
 
-            # perform an additional forward pass in the comparison module
-            with torch.no_grad():
-                self.ignore_reference_module_activations = True      # temporarily ignore reference module activation hooks (relevant if the comparison module is the reference module)
-                comp_output = comp_mod(*input)
-                self.ignore_reference_module_activations = False
+            # move the input and output to the CPU if cpu_offload is set
+            if self.cpu_offload:
+                input = (i.cpu() if isinstance(i, torch.Tensor) else i for i in input)
+                output = output.cpu()
 
-            # compute difference metrics
-            for metric_name, metric_fn in self.activation_difference_metrics.items():
-                # compute the metric
-                result = metric_fn(output, comp_output.detach())
-
-                # monitor the metric
-                log_entry = f"mup_coordinate_check/{module_name}/{metric_name}"
-                self.log_tensor(log_entry, result)
-
-            self.logger.debug(f"Step {self.step}: Monitored mup coordinate check activation differences of module %s with shape %s", module_name, output.shape)
-
+            # store the input and output
+            self.module_inputs[module_name] = input
+            self.module_outputs[module_name] = output
         return hook
+    
 
+    def setup_mup_coordinate_check(self):
+        """Register hooks necessary for the muP coordinate check."""
+        self.module_inputs = {}             # a mapping from module names to their inputs
+        self.module_outputs = {}            # a mapping from module names to their outputs (activations)
+        self.mup_forward_hooks = {}
+
+        # register forward hooks for all modules
+        for name, module in self.module.named_modules():
+            name = format_module_name(name)
+            self.mup_forward_hooks[name] = module.register_forward_hook(self._get_mup_forward_hook(name))
+            self.logger.debug(f"Step {self.step}: Registered forward hook for module %s", name)
+
+        # TODO verify state & clean-up. also might want to make input / output storage independent from mup in the future.
+
+
+    def mup_coordinate_check(self, device):
+        """Perform a muP coordinate check.
+
+        This function performs additional forwad passes to compare the activation differences of the monitored module and the reference module.
+        
+        Note: The current implementation works on a single device only (? did this change though?)
+        """
+        if not self.is_monitoring():
+            return
+        
+        if self.reference_module is None:
+            raise ValueError("Reference module is required for muP coordinate check. Please set the reference module first.")
+
+        # iterate over module to perform coordinate check
+        comparison_modules = dict(self.reference_module.named_modules())
+
+        for name, module in self.module.named_modules():
+            comparison_module = comparison_modules[name]
+            name = format_module_name(name)
+            module_input = self.module_inputs[name]
+            module_output = self.module_outputs[name]
+            comparison_output = self.reference_module_activations[name]
+
+            # move all tensors to the specified device
+            module_input = (i.to(device) if isinstance(i, torch.Tensor) else i for i in module_input)
+            module_output = module_output.to(device)
+            comparison_output = comparison_output.to(device)
+
+            self._module_mup_coordinate_check(name, module_input, module_output, comparison_output, comparison_module)
+            
+        # clear stored inputs and outputs
+        self.module_inputs = {}             
+        self.module_outputs = {}
+         
 
     #################################################################
     # Monitor the activations inside a scaled dot product attention operation
