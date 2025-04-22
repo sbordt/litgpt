@@ -609,14 +609,14 @@ class ModuleMonitor:
             module_output = self.module_outputs[name]
 
             # move all tensors to the specified device
-            module_input = (i.to(device, dtype=dtype) if isinstance(i, torch.Tensor) else i for i, dtype in zip(module_input, module_input_dtypes))
+            module_input = (i.to(device, dtype=t) if isinstance(i, torch.Tensor) else i for i, t in zip(module_input, module_input_dtypes))
             module_output = module_output.to(device)
             comparison_output = comparison_output.to(device)
 
             # print all tensor shapes and dtypes
-            print(f"Step {self.step}: muP coordinate check for module %s with input shape %s, output shape %s, comparison output shape %s", name, [i.shape for i in module_input], module_output.shape, comparison_output.shape)
-            # print all tensor dtypes
-            print(f"Step {self.step}: muP coordinate check for module %s with input dtypes %s, output dtype %s, comparison output dtype %s", name, [i.dtype for i in module_input], module_output.dtype, comparison_output.dtype)
+            print(f"Step {self.step}: muP coordinate check for module {name} with input shapes {[i.shape if isinstance(i, torch.Tensor) else None for i in module_input]} and dtypes {[i.dtype if isinstance(i, torch.Tensor) else None for i in module_input]}")
+            print(f"Step {self.step}: muP coordinate check for module {name} with output shape {module_output.shape} and dtype {module_output.dtype}")
+            print(f"Step {self.step}: muP coordinate check for module {name} with comparison output shape {comparison_output.shape} and dtype {comparison_output.dtype}")
 
             self._module_mup_coordinate_check(name, module_input, module_output, comparison_output, comparison_module)
             
