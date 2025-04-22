@@ -545,9 +545,6 @@ class ModuleMonitor:
             if not self.is_monitoring():
                 return
             
-            # we store the exact dtypes used on the device because we need to use them later
-            input_dtypes = tuple(i.dtype if isinstance(i, torch.Tensor) else None for i in input)
-            
             # detach input and output from the computational graph
             input = tuple(i.detach() if isinstance(i, torch.Tensor) else i for i in input)
             output = output.detach()
@@ -558,7 +555,7 @@ class ModuleMonitor:
                 output = output.cpu()
 
             # store the input and output
-            self.module_inputs[module_name] = (input, input_dtypes)
+            self.module_inputs[module_name] = input
             self.module_outputs[module_name] = output
         return hook
     
@@ -605,19 +602,13 @@ class ModuleMonitor:
             comparison_module = comparison_modules[name]
             name = format_module_name(name)
             comparison_output = self.reference_module_activations[name]
-            module_input, module_input_dtypes = self.module_inputs[name]
+            module_input = self.module_inputs[name]
             module_output = self.module_outputs[name]
 
             # move all tensors to the specified device
-            # module_input = tuple(i.to(device, dtype=t) if isinstance(i, torch.Tensor) else i for i, t in zip(module_input, module_input_dtypes))
-            module_input = tuple(i.to(device) if isinstance(i, torch.Tensor) else i for i, t in zip(module_input, module_input_dtypes))
+            module_input = tuple(i.to(device) if isinstance(i, torch.Tensor) else i for i, t in module_input)
             module_output = module_output.to(device)
             comparison_output = comparison_output.to(device)
-
-            # print all tensor shapes and dtypes
-            print(f"Step {self.step}: muP coordinate check for module {name} with input shapes {[i.shape if isinstance(i, torch.Tensor) else None for i in module_input]} and dtypes {[i.dtype if isinstance(i, torch.Tensor) else None for i in module_input]}")
-            print(f"Step {self.step}: muP coordinate check for module {name} with output shape {module_output.shape} and dtype {module_output.dtype}")
-            print(f"Step {self.step}: muP coordinate check for module {name} with comparison output shape {comparison_output.shape} and dtype {comparison_output.dtype}")
 
             self._module_mup_coordinate_check(name, module_input, module_output, comparison_output, comparison_module)
             
