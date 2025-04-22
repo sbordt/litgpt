@@ -595,7 +595,7 @@ class ModuleMonitor:
         comparison_modules = dict(self.reference_module.named_modules())
 
         for name, module in self.module.named_modules():
-            if not name in self.module_inputs:
+            if not format_module_name(name) in self.module_inputs:
                 # we only perform the mup coordinate check for modules that run "forward" / call their forward hooks (this excludes ModuleList / ModuleDict)
                 continue
 
