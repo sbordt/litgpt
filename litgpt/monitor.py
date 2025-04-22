@@ -546,10 +546,10 @@ class ModuleMonitor:
                 return
             
             # we store the exact dtypes used on the device because we need to use them later
-            input_dtypes = (i.dtype if isinstance(i, torch.Tensor) else None for i in input)
+            input_dtypes = tuple(i.dtype if isinstance(i, torch.Tensor) else None for i in input)
             
             # detach input and output from the computational graph
-            input = (i.detach() if isinstance(i, torch.Tensor) else i for i in input)
+            input = tuple(i.detach() if isinstance(i, torch.Tensor) else i for i in input)
             output = output.detach()
 
             # move the input and output to the CPU if cpu_offload is set
@@ -609,7 +609,7 @@ class ModuleMonitor:
             module_output = self.module_outputs[name]
 
             # move all tensors to the specified device
-            module_input = (i.to(device, dtype=t) if isinstance(i, torch.Tensor) else i for i, t in zip(module_input, module_input_dtypes))
+            module_input = tuple(i.to(device, dtype=t) if isinstance(i, torch.Tensor) else i for i, t in zip(module_input, module_input_dtypes))
             module_output = module_output.to(device)
             comparison_output = comparison_output.to(device)
 
