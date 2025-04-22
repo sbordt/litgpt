@@ -570,7 +570,7 @@ class ModuleMonitor:
         for name, module in self.module.named_modules():
             name = format_module_name(name)
             self.mup_forward_hooks[name] = module.register_forward_hook(self._get_mup_forward_hook(name))
-            self.logger.debug(f"Step {self.step}: Registered forward hook for module %s", name)
+            self.logger.debug(f"Step {self.step}: Registered mup forward hook for module %s", name)
 
         # TODO verify state & clean-up. also might want to make input / output storage independent from mup in the future.
 
@@ -591,12 +591,14 @@ class ModuleMonitor:
         # iterate over module to perform coordinate check
         comparison_modules = dict(self.reference_module.named_modules())
 
+        print("Number of saved inputs and outputs: ", len(self.module_inputs), len(self.module_outputs))
+
         for name, module in self.module.named_modules():
             comparison_module = comparison_modules[name]
             name = format_module_name(name)
+            comparison_output = self.reference_module_activations[name]
             module_input = self.module_inputs[name]
             module_output = self.module_outputs[name]
-            comparison_output = self.reference_module_activations[name]
 
             # move all tensors to the specified device
             module_input = (i.to(device) if isinstance(i, torch.Tensor) else i for i in module_input)
