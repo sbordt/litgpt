@@ -521,13 +521,14 @@ def fit(
                     loss = chunked_cross_entropy(logits, local_targets)
                     fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
-                if loss_sum is None:
-                    loss_sum = loss.detach() / 2
-                else:
-                    loss_sum += loss.detach() / 2
+                    if loss_sum is None:
+                        loss_sum = loss.detach() / 2
+                    else:
+                        loss_sum += loss.detach() / 2
 
-                if with_mup_coordinate_check:
-                    training_monitor.mup_coordinate_check(fabric.device)
+                    if with_mup_coordinate_check:
+                        training_monitor.mup_coordinate_check(fabric.device)
+                        
                 training_monitor.after_micro_batch()                                                                    
             running_loss.update(loss_sum)
 
@@ -539,10 +540,11 @@ def fit(
                 loss = chunked_cross_entropy(logits, targets)
                 fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
+                if with_mup_coordinate_check:
+                    training_monitor.mup_coordinate_check(fabric.device)
+
             running_loss.update(loss.detach())
             
-            if with_mup_coordinate_check:
-                training_monitor.mup_coordinate_check(fabric.device)
             training_monitor.after_micro_batch()
 
         if not is_accumulating:
