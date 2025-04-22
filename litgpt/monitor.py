@@ -529,12 +529,12 @@ class ModuleMonitor:
 
             # Frobenious norm of (W_t-W_0) x_t            
             result = l2_norm(module_output - W0_xt)
-            log_entry = f"mup_coordinate_check/{module_name}/(W_t-W_0)x_t/l2norm"
+            log_entry = f"(W_t-W_0)x_t/{module_name}/l2norm"
             self.log_tensor(log_entry, result)
 
             # Frobenious norm of W_0 (x_t-x_0)
             result = l2_norm(W0_xt - comparison_output)
-            log_entry = f"mup_coordinate_check/{module_name}/W_0(x_t-x_0)/l2norm"
+            log_entry = f"W_0(x_t-x_0)/{module_name}/l2norm"
             self.log_tensor(log_entry, result)
 
             self.logger.debug(f"Step {self.step}: Performed mup coordinate check for module %s with shape %s", module_name, module_output.shape)
