@@ -527,7 +527,7 @@ def fit(
                     loss_sum += loss.detach() / 2
 
                 if with_mup_coordinate_check:
-                    training_monitor.mup_coordinate_check(fabric.device, torch.bfloat16)
+                    training_monitor.mup_coordinate_check(fabric.device)
                 training_monitor.after_micro_batch()                                                                    
             running_loss.update(loss_sum)
 
