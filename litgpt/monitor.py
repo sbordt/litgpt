@@ -606,7 +606,7 @@ class ModuleMonitor:
             module_output = self.module_outputs[name]
 
             # move all tensors to the specified device
-            module_input = tuple(i.to(device) if isinstance(i, torch.Tensor) else i for i, t in module_input)
+            module_input = tuple(i.to(device) if isinstance(i, torch.Tensor) else i for i in module_input)
             module_output = module_output.to(device)
             comparison_output = comparison_output.to(device)
 
