@@ -277,7 +277,7 @@ def main(
     if with_mup_coordinate_check:
         if fabric.world_size != 1:
             raise ValueError("muP coordinate check is only supported for single-GPU training")
-        training_monitor.setup_mup_coordinate_check(reference_model)
+        training_monitor.setup_mup_coordinate_check()
 
     # torch.compile the model and setup for distributed training
     if with_compile:
