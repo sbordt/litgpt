@@ -575,7 +575,7 @@ class ModuleMonitor:
         # TODO verify state & clean-up. also might want to make input / output storage independent from mup in the future.
 
 
-    def mup_coordinate_check(self, device):
+    def mup_coordinate_check(self, device, dtype: torch.dtype):
         """Perform a muP coordinate check.
 
         This function performs additional forwad passes to compare the activation differences of the monitored module and the reference module.
@@ -606,9 +606,9 @@ class ModuleMonitor:
             module_output = self.module_outputs[name]
 
             # move all tensors to the specified device
-            module_input = (i.to(device) if isinstance(i, torch.Tensor) else i for i in module_input)
-            module_output = module_output.to(device)
-            comparison_output = comparison_output.to(device)
+            module_input = (i.to(device, dtype=dtype) if isinstance(i, torch.Tensor) else i for i in module_input)
+            module_output = module_output.to(device, dtype=dtype)
+            comparison_output = comparison_output.to(device, dtype=dtype)
 
             self._module_mup_coordinate_check(name, module_input, module_output, comparison_output, comparison_module)
             
