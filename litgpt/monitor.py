@@ -539,8 +539,6 @@ class ModuleMonitor:
 
             self.logger.debug(f"Step {self.step}: Performed mup coordinate check for module %s with shape %s", module_name, module_output.shape)
 
-            del W0_xt
-
 
     def _get_mup_forward_hook(self, module_name: str):
         def hook(module, input, output):

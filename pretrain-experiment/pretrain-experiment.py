@@ -157,6 +157,7 @@ if __name__ == "__main__":
                 "lr": args.lr,
                 "betas": (0.9, 0.95),
                 "weight_decay": 0.1,
+                "eps": 1e-12,
             }
         }
     if args.optimizer == "SGD":
