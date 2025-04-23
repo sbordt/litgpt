@@ -82,6 +82,7 @@ if __name__ == "__main__":
     parser.add_argument("--micro_batch_size", type=int, default=8)
     parser.add_argument("--optimizer", type=str, default="AdamW", help="AdamW or SGD")
     parser.add_argument("--lr", type=float, default=0.0006)
+    parser.add_argument("--clip_grad_norm", type=float, default=1.0)
     parser.add_argument('--mup', action='store_true', help='Enable MUP (Maximal Update Parameterization)')
     parser.add_argument("--mup_input_alpha", type=float, default=1)
     parser.add_argument("--mup_output_alpha", type=float, default=1)
@@ -232,7 +233,7 @@ if __name__ == "__main__":
             micro_batch_size=args.micro_batch_size,
             max_tokens=args.max_tokens,
             max_seq_length=args.max_seq_length,
-            max_norm=1.0,
+            max_norm=args.clip_grad_norm,
             min_lr=0.1*args.lr, # reduce the learning rate to 10% of the initial value
             lr_warmup_steps=700,
             tie_embeddings=args.tie_embeddings,
