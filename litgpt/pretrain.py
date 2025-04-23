@@ -661,7 +661,7 @@ def fit(
             fabric.barrier()
 
             # auto-cancel
-            if auto_cancel and val_loss > 11:
+            if auto_cancel and val_loss > 18:
                 fabric.print(f"Auto-canceling training due to high validation loss {val_loss:.4f}.")
                 raise SystemExit(1)
  
