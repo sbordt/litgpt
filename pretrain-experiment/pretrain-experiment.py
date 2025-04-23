@@ -76,6 +76,7 @@ if __name__ == "__main__":
     parser.add_argument("--width", type=int, default=128, help="width scaling")
     parser.add_argument("--max_tokens", type=int, default=1400000000) # 6.4B is 2x Chinchilla for 160m model
     parser.add_argument("--warmup_steps", type=float, default=700)
+    parser.add_argument("--stop_step", type=int, default=None)
     parser.add_argument("--max_seq_length", type=int, default=512)
     parser.add_argument("--global_batch_size", type=int, default=512)
     parser.add_argument("--micro_batch_size", type=int, default=8)
@@ -249,6 +250,7 @@ if __name__ == "__main__":
         with_activation_differences = args.activation_differences,
         with_mup_coordinate_check = args.mup_coordinate_check,
         with_compile = args.compile,
+        stop_after_step= args.stop_step,
         use_pytorch_profiler = args.use_pytorch_profiler,
         initialize_weights_fn = initialize_weights_fn,
         logger_kwargs = {

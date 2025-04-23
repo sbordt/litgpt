@@ -92,6 +92,7 @@ def setup(
     with_activation_differences = False,
     with_mup_coordinate_check = False,
     with_compile: bool = True,                          # whether to compile the model
+    stop_after_step: int = None,                             # stop training after this number of steps (does not influence the training process, learning rate, etc.)
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -209,6 +210,7 @@ def setup(
         with_activation_differences,
         with_mup_coordinate_check,
         with_compile,
+        stop_after_step,
         initialize_weights_fn,
         get_lr_fn,
         use_pytorch_profiler,
@@ -235,6 +237,7 @@ def main(
     with_activation_differences: bool = False,
     with_mup_coordinate_check: bool = False,
     with_compile: bool = True,
+    stop_after_step: Optional[int] = None,
     initialize_weights_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
@@ -364,6 +367,7 @@ def main(
         reference_model_type,
         with_activation_differences,
         with_mup_coordinate_check,
+        stop_after_step,
         get_lr_fn,
         use_pytorch_profiler,
         auto_cancel)
@@ -407,6 +411,7 @@ def fit(
     reference_model_type: str = None,
     with_activation_differences = False,
     with_mup_coordinate_check = False,
+    stop_after_step: Optional[int] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
     auto_cancel: bool = False,
@@ -485,6 +490,10 @@ def fit(
             continue
 
         if state["iter_num"] >= max_iters:
+            break
+
+        if stop_after_step is not None and state["step_count"] >= stop_after_step:
+            fabric.print(f"Stopping training after {stop_after_step} steps.")
             break
 
         # determine and set the learning rate for this iteration
