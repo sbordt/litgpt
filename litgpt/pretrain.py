@@ -494,7 +494,8 @@ def fit(
 
         if stop_after_step is not None and state["step_count"] >= stop_after_step:
             fabric.print(f"Stopping training after {stop_after_step} steps.")
-            break
+            # we kill the python process, so we don't accidentally save a final checkpoint etc.
+            raise SystemExit(1)
 
         # determine and set the learning rate for this iteration
         lr = get_lr_fn(optimizer.defaults["lr"], state["iter_num"], warmup_iters, max_iters, train.min_lr, state["step_count"]+1)
