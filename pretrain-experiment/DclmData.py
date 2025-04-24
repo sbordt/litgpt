@@ -46,7 +46,7 @@ class DclmData(DataModule):
                 shuffle=True,
                 drop_last=True,
                 seed=self.seed,
-            ) for part_idx in range(self.num_parts) # we begin indexing the parts at 1. the first part is used for validation
+            ) for part_idx in range(self.num_parts)
         ]
         dataset = CombinedStreamingDataset(datasets=datasets, seed=self.seed)
         dataloader = StreamingDataLoader(
@@ -62,7 +62,7 @@ class DclmData(DataModule):
             StreamingDataset(
                 input_dir=os.path.join(self.data_path, f"part1-val"), 
                 item_loader=TokensLoader(block_size=self.seq_length),
-                subsample=0.01,        # use ca. 300M tokens for validation THIS IS DEBUGGING
+                subsample=0.3,        # ca. 100M tokens for validation
                 shuffle=True,
                 drop_last=True,
                 seed=7,               # fix the order of the validation data
