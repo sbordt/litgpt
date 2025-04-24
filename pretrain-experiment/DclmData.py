@@ -62,7 +62,7 @@ class DclmData(DataModule):
             StreamingDataset(
                 input_dir=os.path.join(self.data_path, f"part1-val"), 
                 item_loader=TokensLoader(block_size=self.seq_length),
-                subsample=0.3,        # ca. 100M tokens for validation
+                subsample=0.1,        # ca. 30M tokens for validation
                 shuffle=True,
                 drop_last=True,
                 seed=7,               # fix the order of the validation data
