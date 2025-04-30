@@ -516,16 +516,16 @@ class ModuleMonitor:
     #######################################################################################
     def _module_mup_coordinate_check(self, 
                                      module_name: str, 
-                                     module_input: Tuple[Any],            
+                                     Wt_input: Tuple[Any],            
                                      Wt_xt: torch.Tensor,         
-                                     comparison_input: Tuple[Any],              
+                                     W0_input: Tuple[Any],              
                                      W0_x0: torch.Tensor,       
                                      W0_module: torch.nn.Module):
             
             # perform a forward pass in the comparison module, using the intermediate input from the monitored module (W_0 x_t)
             with torch.no_grad():
                 self.ignore_reference_module_activations = True      # temporarily ignore reference module activation hooks (relevant if the comparison module is the reference module)
-                W0_xt = W0_module(*module_input).detach()
+                W0_xt = W0_module(*Wt_input).detach()
                 self.ignore_reference_module_activations = False
 
             # Frobenious norm of (W_t-W_0) x_t            
@@ -539,17 +539,23 @@ class ModuleMonitor:
             self.log_tensor(log_entry, result)
 
             # norm of x_t
-            xt = module_input[0]
+            xt = Wt_input[0]
             if isinstance(xt, torch.Tensor):
                 self.logger.debug(f"Step {self.step}: MuP coordinate check: Input to module {module_name} is a tensor with shape {xt.shape}")
-                result = l2_norm(xt)
-                log_entry = f"(W_t-W_0)x_t/{module_name}/x_t/l2norm"
-                self.log_tensor(log_entry, result)
+                try:
+                    result = l2_norm(xt)
+                    log_entry = f"(W_t-W_0)x_t/{module_name}/x_t/l2norm"
+                    self.log_tensor(log_entry, result)
+                except Exception as e:
+                    print(module_name)
+                    print(xt)
+                    print(Wt_input)
+                    raise e
             else:
                 self.logger.debug(f"Step {self.step}: MuP coordinate check: Input to module {module_name} is not a tensor, but {type(xt)}")
 
             # norm of x_t - x_0
-            x0 = comparison_input[0]
+            x0 = W0_input[0]
             if isinstance(x0, torch.Tensor) and isinstance(xt, torch.Tensor):
                 result = l2_norm(xt - x0)
                 log_entry = f"W_0(x_t-x_0)/{module_name}/x_t-x_0/l2norm"
