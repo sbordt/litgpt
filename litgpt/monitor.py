@@ -585,6 +585,10 @@ class ModuleMonitor:
             if not self.is_monitoring():
                 return
             
+            if self.ignore_reference_module_activations: # very important! otherwise we re-set the inputs to the reference modules during the additional mup-forward passes
+                                                         # in the future, this should be replaced with a more general no_monitor context manager
+                return
+            
             # same as for _get_mup_forward_hook, but we already have the activations, so we only need to store the inputs
             input = tuple(i.detach() if isinstance(i, torch.Tensor) else i for i in input)
 
