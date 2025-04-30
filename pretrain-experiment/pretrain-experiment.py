@@ -189,16 +189,16 @@ if __name__ == "__main__":
     }
     parameter_metrics_spec = {
         r".*": {"l2norm": lambda param: l2_norm(param.flatten())},                      # l2 norm for all parameters
-        r".*.norm_.*": {"opnorm": lambda param: param.abs().max(dim=-1).values},        # operator norm for normalization layers (the maximum parameter value)
-        r".*mlp\.(fc|proj)\.weight.*" : {"opnorm": matrix_opnorm},                      # operator norm for linear layers   
+        r".*(norm_.*|ln_f).*": {"opnorm": lambda param: param.abs().max(dim=-1).values},        # operator norm for normalization layers (the maximum parameter value)
+        r".*(mlp\.(fc|proj)\.weight|lm_head).*" : {"opnorm": matrix_opnorm},            # operator norm for linear layers   
     }
     parameter_difference_metrics_spec = {
         # frobenius norm of the weight updates
         r".*" : {"l2norm": lambda param, ref_param: l2_norm((param-ref_param).flatten())},
 
         # operator norm of the weight updates
-        r".*.norm_.*": {"opnorm": lambda param, ref_param: (param-ref_param).abs().max(dim=-1).values},   
-        r".*mlp\.(fc|proj)\.weight.*" : {"opnorm": lambda param, ref_param: matrix_opnorm(param-ref_param)},                        
+        r".*(norm_.*|ln_f).*": {"opnorm": lambda param, ref_param: (param-ref_param).abs().max(dim=-1).values},   
+        r".*(mlp\.(fc|proj)\.weight|lm_head).*" : {"opnorm": lambda param, ref_param: matrix_opnorm(param-ref_param)},                        
     }
     gradient_metrics = {
         "l2norm": l2_norm,
