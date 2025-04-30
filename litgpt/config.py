@@ -55,6 +55,7 @@ class Config:
     n_query_groups: Optional[int] = None
     shared_attention_norm: bool = False
     norm_class_name: Literal["LayerNorm", "RMSNorm"] = "LayerNorm"
+    layernorm_no_elementwise_affine: bool = False
     rmsnorm_elementwise_affine = True
     post_attention_norm: bool = False
     post_mlp_norm: bool = False
@@ -170,6 +171,11 @@ class Config:
             # this makes it equivalent to `torch.nn.functional.layer_norm`
             # that is used by OLMo
             # Table 5 caption in the OLMo paper shows this - https://aclanthology.org/2024.acl-long.841
+            return partial(torch.nn.LayerNorm, elementwise_affine=False)
+        
+
+        if self.norm_class_name == "LayerNorm" and self.layernorm_no_elementwise_affine:
+            # equivalent to OLMo approach: don't use trainable parameters in LayerNorm
             return partial(torch.nn.LayerNorm, elementwise_affine=False)
 
         return getattr(torch.nn, self.norm_class_name)
