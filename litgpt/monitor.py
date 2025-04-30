@@ -542,15 +542,9 @@ class ModuleMonitor:
             xt = Wt_input[0]
             if isinstance(xt, torch.Tensor):
                 self.logger.debug(f"Step {self.step}: MuP coordinate check: Input to module {module_name} is a tensor with shape {xt.shape}")
-                try:
-                    result = l2_norm(xt)
-                    log_entry = f"(W_t-W_0)x_t/{module_name}/x_t/l2norm"
-                    self.log_tensor(log_entry, result)
-                except Exception as e:
-                    print(module_name)
-                    print(xt)
-                    print(Wt_input)
-                    raise e
+                result = l2_norm(xt)
+                log_entry = f"(W_t-W_0)x_t/{module_name}/x_t/l2norm"
+                self.log_tensor(log_entry, result)
             else:
                 self.logger.debug(f"Step {self.step}: MuP coordinate check: Input to module {module_name} is not a tensor, but {type(xt)}")
 
@@ -650,8 +644,11 @@ class ModuleMonitor:
         comparison_modules = dict(self.reference_module.named_modules())
 
         for name, module in self.module.named_modules():
-            if not format_module_name(name) in self.module_inputs:
-                # we only perform the mup coordinate check for modules that run "forward" / call their forward hooks (this excludes ModuleList / ModuleDict)
+            if not format_module_name(name) in self.module_inputs: # only perform the coordinate check for modules that run "forward" / call their forward hooks (this excludes ModuleList / ModuleDict)
+                continue
+            if format_module_name(name) == "[root module]": # exclude the root module (same result as regular reference module forward pass)
+                continue
+            if isinstance(module, torch.nn.Embedding):      # exclude layers of type torch.nn.Embedding
                 continue
 
             comparison_module = comparison_modules[name]
