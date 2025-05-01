@@ -142,9 +142,12 @@ if __name__ == "__main__":
     model_config.__post_init__() # required as we re-set the norm class name
 
     if args.mup:
-        model_config = apply_mup(model_config, args.width, args.mup_input_alpha, args.mup_output_alpha) # add mup hyperparameters
+        if SLURM_PROCID == 0:
+            print("Setting up model config for training with muP...")
+        model_config = scale_width(model_config, 256) # set 256 to be the base width and scale the mup width multiplier with that
+        model_config = apply_mup(model_config, args.width, args.mup_input_alpha, args.mup_output_alpha)
     else:
-        model_config = scale_width(model_config, args.width) # only scale the width
+        model_config = scale_width(model_config, args.width) # scale the width
 
     if SLURM_PROCID == 0:
         print(f"SLURM_PROCID: {SLURM_PROCID}, SLURM_NTASKS: {WORLD_SIZE}")

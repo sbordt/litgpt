@@ -1,4 +1,11 @@
-"""Litgpt training with Maximal Update Parametrization (μP)
+"""Litgpt training with Maximal Update Parametrization (μP).
+
+   muP means that:
+    - the initial weights of the output layer (lm_head) are set to zero
+    - the input embedding forward pass output is multiplied by a tunable parameter (input_alpha)
+    - the output unembedding forward pass output is multiplied by a tunable parameter (output_alpha)
+    - 
+
 
    Inspired by https://github.com/EleutherAI/nanoGPT-mup/
 
@@ -132,11 +139,9 @@ def initialize_mup_weights(fabric: L.Fabric, model, n_layer: int, n_embd: int) -
         if isinstance(mod, (LLaMAMLP, CausalSelfAttention)):
             mod.proj.reset_parameters = partial(init_weights, mod.proj, std=(1 / math.sqrt(n_embd) / n_layer))
 
-    # print the type of model
+    print("Performing muP weight initialization...")
     print(f"Model type: {type(model)}")
-    # does model have a confit attribute?
     print(f"Model has config attribute: {hasattr(model, 'config')}")
-    # does model.config have a mup_args attribute?
     print(f"Model has mup_args attribute: {hasattr(model.config, 'mup_args')}")
 
     # set the output layer weights to zero
