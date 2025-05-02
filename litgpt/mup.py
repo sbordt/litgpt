@@ -45,6 +45,9 @@ class MuPArgs:
     output_alpha: float = 1.0
     """Tunable multiplier applied to output unembedding forward pass output"""
 
+    with_attention_head_1_over_n: bool = False
+    """Whether to use 1/n scaling for attention heads."""
+
 
 def _add_mup_args_to_config(config: Config, mup_args: MuPArgs) -> Config:
     """Add the MuP arguments to the config"""
@@ -179,7 +182,7 @@ def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
     mup_params = []
     other_params = []
     for n, p in param_dict.items():
-        if n.endswith('attn.weight') or n.endswith('fc.weight') or n.endswith('proj.weight'):
+        if n.endswith('attn.weight') or n.endswith('fc.weight') or n.endswith('proj.weight') or 'lm_head.weight' in n:
             mup_params.append(p)
         else:
             other_params.append(p)
@@ -190,8 +193,7 @@ def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
         {"params": mup_params, "lr_scale": 1/model.config.mup_args.width_multiplier},
         {"params": other_params, "lr_scale": 1}
     ]
-    # print(f"MuP parameters: {sum(p.numel() for p in mup_params if p.requires_grad)}")
-    # print(f"Other parameters: {sum(p.numel() for p in other_params if p.requires_grad)}")
+    print(f"Number of parameters with muP learning rate scaling: {sum(p.numel() for p in mup_params if p.requires_grad)}")
 
     return instantiate_class(optim_groups, optimizer)
 

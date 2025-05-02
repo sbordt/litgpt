@@ -358,11 +358,12 @@ class CausalSelfAttention(nn.Module, MonitorMixin):
 
         ### Begin muP code ###
         if has_mup_enabled(self.config):
-            if self.config.attention_scores_scalar is not None:
-                raise NotImplementedError("Attention scores scalar is not supported with muP")
-            if self.config.attention_logit_softcapping is not None:
-                raise NotImplementedError("Attention logit softcapping is not supported with muP")
-            scale = 1.0 / self.config.head_size
+            if self.config.mup_args.with_attention_head_1_over_n:
+                if self.config.attention_scores_scalar is not None:
+                    raise NotImplementedError("Attention scores scalar is not supported with muP")
+                if self.config.attention_logit_softcapping is not None:
+                    raise NotImplementedError("Attention logit softcapping is not supported with muP")
+                scale = 1.0 / self.config.head_size
         ### End muP code ###
 
         # with softcapping we cannot use SDPA
