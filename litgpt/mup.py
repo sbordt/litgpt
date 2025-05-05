@@ -177,12 +177,14 @@ def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
         return instantiate_class(model.parameters(), optimizer)
 
     # define parameter groups for mup
+    weight_decay = optimizer["init_args"].get("weight_decay", 0.0)
+
     param_dict = {pn: p for pn, p in model.named_parameters()}
     param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
     mup_params = []
     other_params = []
     for n, p in param_dict.items():
-        if n.endswith('attn.weight') or n.endswith('fc.weight') or n.endswith('proj.weight') or 'lm_head.weight' in n:
+        if n.endswith('attn.weight') or n.endswith('fc.weight') or n.endswith('proj.weight'):   # note that we do not scale the learning rate of the output layer (lm_head). we scale the input to the output layer (lm_head) in the forward pass instead.
             mup_params.append(p)
         else:
             other_params.append(p)
@@ -190,8 +192,8 @@ def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
         # we set a custom parameter lr_scale for each group
         # the training code is responsible for using this scale factor after
         # scheduling the overall leraning rate for the current step
-        {"params": mup_params, "lr_scale": 1/model.config.mup_args.width_multiplier},
-        {"params": other_params, "lr_scale": 1}
+        {"params": mup_params, "lr_scale": 1/model.config.mup_args.width_multiplier, "weight_decay": weight_decay * model.config.mup_args.width_multiplier},        # adujust weight decay for mup params: we want to keep the same effective weight decay for all parameters.
+        {"params": other_params, "lr_scale": 1, "weight_decay": weight_decay},
     ]
     print(f"Number of parameters with muP learning rate scaling: {sum(p.numel() for p in mup_params if p.requires_grad)}")
 

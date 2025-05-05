@@ -11,7 +11,7 @@ import re
 
 
 def format_module_name(name: str):
-    if name == "" or name == "_orig_mod":
+    if name == "" or name == "_orig_mod" or name == "_forward_module" or name == "_fsdp_wrapped_module":
         return "[root module]"
     for s in ["_forward_module.", "_orig_mod.", "_fsdp_wrapped_module."]:
         name = name.replace(s, "")
@@ -652,7 +652,7 @@ class ModuleMonitor:
                 continue
             if format_module_name(name) == "[root module]": # exclude the root module (same result as regular reference module forward pass)
                 continue
-            if isinstance(module, torch.nn.Embedding):      # exclude layers of type torch.nn.Embedding
+            if isinstance(module, torch.nn.Embedding):      # exclude layers of type torch.nn.Embedding (input is Long and not float)
                 continue
 
             comparison_module = comparison_modules[name]

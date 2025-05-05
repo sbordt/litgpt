@@ -89,6 +89,7 @@ if __name__ == "__main__":
     parser.add_argument("--mup_output_alpha", type=float, default=1)
     parser.add_argument("--precision", type=str, default="32-true")
     parser.add_argument("--tie_embeddings", action="store_true", default=False)
+    parser.add_argument("--mse_loss", action="store_true", default=False, help="Use MSE loss instead of cross entropy")
     parser.add_argument("--data_seed", type=int, default=42)
     parser.add_argument("--seed", type=int, default=42)
     # pytorch options
@@ -248,6 +249,7 @@ if __name__ == "__main__":
             interval=1000,
             max_iters=100000, # use the entire validation set
         ),
+        mse_loss=args.mse_loss,
         devices = "auto",
         logger_name = "wandb",
         seed = args.seed,

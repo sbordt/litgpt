@@ -81,6 +81,7 @@ def setup(
         tie_embeddings=False,
     ),
     eval: EvalArgs = EvalArgs(interval=1000, max_iters=100),
+    mse_loss: bool = False,
     optimizer: Union[str, Dict] = "AdamW",
     devices: Union[int, str] = "auto",
     num_nodes: int = 1,
@@ -205,6 +206,7 @@ def setup(
         train,
         eval,
         optimizer,
+        mse_loss,
         training_monitor,
         reference_model_type,
         with_activation_differences,
@@ -232,6 +234,7 @@ def main(
     train: TrainArgs,
     eval: EvalArgs,
     optimizer: Union[str, Dict],
+    mse_loss: bool,
     training_monitor :ModuleMonitor = None,
     reference_model_type: str = None,
     with_activation_differences: bool = False,
@@ -363,6 +366,7 @@ def main(
         tokenizer_dir, 
         train, 
         eval,
+        mse_loss,
         training_monitor,
         reference_model,
         reference_model_type,
@@ -407,6 +411,7 @@ def fit(
     tokenizer_dir: Optional[Path],
     train: TrainArgs,
     eval: EvalArgs,
+    mse_loss: bool,
     training_monitor :ModuleMonitor = None,
     reference_model: Optional[nn.Module] = None,
     reference_model_type: str = None,
@@ -694,10 +699,20 @@ def fit(
     gc.collect()
     torch.cuda.ipc_collect()
     torch.cuda.empty_cache()
-    
+
+
+def mse_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """Mean squared error loss on the logits."""
+    logits = logits.reshape(-1, logits.size(-1))    # [B*S, V] contains the logits for each token
+    targets = targets.reshape(-1)                   # [B*S]    contain the index of the target token
+    # now convert the targets to one-hot encoding
+    targets = torch.nn.functional.one_hot(targets, num_classes=logits.size(-1)).float()  # [B*S, V]
+    # now we can compute the MSE loss
+    return torch.nn.functional.mse_loss(logits, targets, reduction="mean")    
+
 
 @torch.no_grad()
-def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max_iters: int, verbose: bool = True) -> torch.Tensor:
+def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max_iters: int, verbose: bool = True, mse_loss: bool = False) -> torch.Tensor:
     if max_iters == 0: # allow the user to skip validation
         return torch.tensor(42, device=fabric.device)
 
@@ -713,7 +728,10 @@ def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max
         input_ids = batch[:, 0 : model.max_seq_length].contiguous().long()
         targets = batch[:, 1 : (model.max_seq_length + 1)].contiguous().long()
         logits = model(input_ids)
-        loss = chunked_cross_entropy(logits, targets)
+        if mse_loss:
+            loss = mse_loss(logits, targets)
+        else:
+            loss = chunked_cross_entropy(logits, targets)
         losses.append(loss)
 
     val_loss = torch.stack(losses).mean()

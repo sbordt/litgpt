@@ -95,8 +95,8 @@ class GPT(nn.Module):
             mask = None
 
         x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
-        if self.config.scale_embeddings:
-            x = x * torch.tensor(self.config.n_embd**0.5, dtype=x.dtype)
+        #if self.config.scale_embeddings:
+        #    x = x * torch.tensor(self.config.n_embd**0.5, dtype=x.dtype)
 
         ### Begin muP code ### Input Scaling
         if has_mup_enabled(self.config):
