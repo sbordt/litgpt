@@ -59,7 +59,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, default="/mnt/lustre/work/luxburg/shared_data/dclm-baseline-1.0-tokenized")
     parser.add_argument("--save_interval", type=int, default=1000)
     parser.add_argument("--resume", action="store_true", default=False, help="resume training from the most recent checkpoint. the checkpoint needs to exist.")
-    parser.add_argument("--auto-cancel", action="store_true", default=False, help="enable auto-cancel for the job. this will cancel the job if the validation loss is ever larger than 11.")
+    parser.add_argument("--auto-cancel", action="store_true", default=False, help="enable auto-cancel for the job. this will cancel the job if the validation loss gets too large")
     parser.add_argument("--log-level", type=str, default="INFO", help="logging level")
     # monitoring parameters
     parser.add_argument("--monitor", action="store_true", default=True)
@@ -85,8 +85,9 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.0006)
     parser.add_argument("--clip_grad_norm", type=float, default=1.0)
     parser.add_argument('--mup', action='store_true', help='Enable MUP (Maximal Update Parameterization)')
-    parser.add_argument("--mup_input_alpha", type=float, default=1)
-    parser.add_argument("--mup_output_alpha", type=float, default=1)
+    parser.add_argument("--mup_input_alpha", type=float, default=1.0)
+    parser.add_argument("--mup_output_alpha", type=float, default=1.0)
+    parser.add_argument("--force-sp-init", action="store_true", default=False, help="force the standard initialization for the model weights, even when using mup.")
     parser.add_argument("--precision", type=str, default="32-true")
     parser.add_argument("--tie_embeddings", action="store_true", default=False)
     parser.add_argument("--mse_loss", action="store_true", default=False, help="Use MSE loss instead of cross entropy")
@@ -157,6 +158,10 @@ if __name__ == "__main__":
 
     # weight initialization for mup or sp
     initialize_weights_fn = initialize_mup_weights if args.mup else initialize_standard_weights
+    if args.force_sp_init:
+        if SLURM_PROCID == 0:
+            print("Forcing standard initialization for the model weights...")
+        initialize_weights_fn = initialize_standard_weights
 
     # optimizer configuration
     optimizer_args = {
