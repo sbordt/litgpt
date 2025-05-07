@@ -525,8 +525,8 @@ class ModuleMonitor:
             
             self.logger.debug(f"Step {self.step}: Performing mup coordinate check for module %s with shape %s ...", module_name, Wt_xt.shape)
             
-            # perform a forward pass in the comparison module, using the intermediate input from the monitored module (W_0 x_t)
             with torch.no_grad():
+                # perform a forward pass in the comparison module, using the intermediate input from the monitored module (W_0 x_t)
                 self.ignore_reference_module_activations = True      # temporarily ignore reference module activation hooks (relevant if the comparison module is the reference module)
                 W0_xt = W0_module(*Wt_input).detach()
                 self.ignore_reference_module_activations = False
@@ -582,7 +582,7 @@ class ModuleMonitor:
             else:
                 self.logger.debug(f"Step {self.step}: MuP coordinate check: Input to module {module_name} is not a tensor, but {type(x0)}")
 
-            # for linear layers and layer norm layers, the term without the bias corrensponds to the coordinate check for the weight
+            # for linear layers and layer norm layers, the terms without the bias provide to the coordinate check for the weight
             if isinstance(Wt_module, torch.nn.Linear) or isinstance(Wt_module, torch.nn.LayerNorm):
                 result = l2_norm(Wt_xt_nobias - W0_xt_nobias)       # Bias free Frobenious norm of (W_t-W_0) x_t
                 log_entry = f"(W_t-W_0)x_t/{module_name}.weight/l2norm"
@@ -600,7 +600,7 @@ class ModuleMonitor:
                 log_entry = f"W_0(x_t-x_0)/{module_name}.weight/W_0 x_0/l2norm"
                 self.log_tensor(log_entry, result)
 
-            # for layer norm, additionally log x-E(x)/Var(x) as inputs to the weights
+            # for layer norm, additionally log x-E(x)/Var(x) as input to the weights
             if isinstance(Wt_module, torch.nn.LayerNorm):           
                 xt = torch.nn.functional.layer_norm(Wt_input[0], Wt_module.normalized_shape, None, None, Wt_module.eps)
                 result = l2_norm(xt)

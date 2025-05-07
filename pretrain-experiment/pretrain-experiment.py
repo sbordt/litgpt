@@ -74,6 +74,7 @@ if __name__ == "__main__":
     parser.add_argument("--norm_class_name", type=str, default="LayerNorm", help="Set to LayerNorm or RMSNorm")
     parser.add_argument("--qk_norm", action="store_true", default=False, help="enable qk normalization")
     parser.add_argument("--layernorm_no_elementwise_affine", action="store_true", default=False, help="disable elementwise affine for LayerNorm")
+    parser.add_argument("--layernorm_no_bias", action="store_true", default=False, help="disable bias for LayerNorm")
     parser.add_argument("--width", type=int, default=128, help="width scaling")
     parser.add_argument("--max_tokens", type=int, default=1400000000) # 6.4B is 2x Chinchilla for 160m model
     parser.add_argument("--warmup_steps", type=float, default=700)
@@ -140,7 +141,8 @@ if __name__ == "__main__":
     model_config.norm_class_name = args.norm_class_name
     model_config.rmsnorm_elementwise_affine = False # disable elementwise affine for RMSNorm
     model_config.qk_norm = args.qk_norm
-    model_config.layernorm_no_elementwise_affine = args.layernorm_no_elementwise_affine
+    model_config.layernorm_elementwise_affine = not args.layernorm_no_elementwise_affine
+    model_config.layernorm_bias = not args.layernorm_no_bias
     model_config.__post_init__() # required as we re-set the norm class name
 
     if args.mup:
