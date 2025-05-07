@@ -517,7 +517,8 @@ class ModuleMonitor:
     def _module_mup_coordinate_check(self, 
                                      module_name: str, 
                                      Wt_input: Tuple[Any],            
-                                     Wt_xt: torch.Tensor,         
+                                     Wt_xt: torch.Tensor, 
+                                     Wt_module: torch.nn.Module,        
                                      W0_input: Tuple[Any],              
                                      W0_x0: torch.Tensor,       
                                      W0_module: torch.nn.Module):
@@ -527,6 +528,25 @@ class ModuleMonitor:
                 self.ignore_reference_module_activations = True      # temporarily ignore reference module activation hooks (relevant if the comparison module is the reference module)
                 W0_xt = W0_module(*Wt_input).detach()
                 self.ignore_reference_module_activations = False
+
+                # for modules that have a .bias attribute, additionally compute the metrics without the bias
+                W0_x0_nobias, Wt_xt_nobias, W0_xt_nobias = None, None, None
+                if hasattr(Wt_module, "bias") and Wt_module.bias is not None and isinstance(Wt_module.bias, torch.Tensor):
+                    try:
+                        W0_x0_nobias = W0_x0 - W0_module.bias
+                        W0_xt_nobias = W0_xt - W0_module.bias
+                        Wt_xt_nobias = Wt_xt - Wt_module.bias
+                    except Exception as e:
+                        self.logger.warning(f"Step {self.step}: MuP coordinate check: Failed to compute bias-free activations for module %s: %s", module_name, e)
+                        W0_x0_nobias, W0_xt_nobias, Wt_xt_nobias = None, None, None
+
+            if isinstance(Wt_module, torch.nn.Embedding):      # special handling for embedding layers: we only compute (W_t-W_0) x_t           
+                result = l2_norm(Wt_xt - W0_xt)
+                log_entry = f"(W_t-W_0)x_t/{module_name}/l2norm"
+                self.log_tensor(log_entry, result)
+
+                self.logger.debug(f"Step {self.step}: Performed mup coordinate check for module %s with shape %s", module_name, Wt_xt.shape)
+                return
 
             # Frobenious norm of (W_t-W_0) x_t            
             result = l2_norm(Wt_xt - W0_xt)
@@ -556,6 +576,24 @@ class ModuleMonitor:
                 self.log_tensor(log_entry, result)
             else:
                 self.logger.debug(f"Step {self.step}: MuP coordinate check: Input to module {module_name} is not a tensor, but {type(x0)}")
+
+            # for linear layers and normalization layers, the term without the bias corrensponds to the coordinate check for the weight
+            if isinstance(Wt_module, torch.nn.Linear):
+                result = l2_norm(Wt_xt_nobias - W0_xt_nobias)       # Bias free Frobenious norm of (W_t-W_0) x_t
+                log_entry = f"(W_t-W_0)x_t/{module_name}.weight/l2norm"
+                self.log_tensor(log_entry, result)
+
+                result = l2_norm(W0_xt_nobias - W0_x0_nobias)       # Bias free Frobenious norm of W_0 (x_t-x_0)
+                log_entry = f"W_0(x_t-x_0)/{module_name}.weight/l2norm"
+                self.log_tensor(log_entry, result)
+
+                result = l2_norm(Wt_xt_nobias)                      # bias free norm of Wt_xt
+                log_entry = f"(W_t-W_0)x_t/{module_name}.weight/W_t x_t/nobias/l2norm"
+                self.log_tensor(log_entry, result)
+
+                result = l2_norm(W0_x0_nobias)                      # bias free norm of W0_x0
+                log_entry = f"W_0(x_t-x_0)/{module_name}.weight/W_0 x_0/nobias/l2norm"
+                self.log_tensor(log_entry, result)
 
             self.logger.debug(f"Step {self.step}: Performed mup coordinate check for module %s with shape %s", module_name, Wt_xt.shape)
 
@@ -652,9 +690,8 @@ class ModuleMonitor:
                 continue
             if format_module_name(name) == "[root module]": # exclude the root module (same result as regular reference module forward pass)
                 continue
-            if isinstance(module, torch.nn.Embedding):      # exclude layers of type torch.nn.Embedding (input is Long and not float)
-                continue
 
+            # TODO we can make this code not fail / only provide a warning if a key is not in the dict (that is, a forward hooks was not called)
             comparison_module = comparison_modules[name]
             name = format_module_name(name)
             comparison_input = self.reference_module_inputs[name]
@@ -671,6 +708,7 @@ class ModuleMonitor:
             self._module_mup_coordinate_check(name, 
                                               module_input, 
                                               module_output, 
+                                              module,
                                               comparison_input,
                                               comparison_output, 
                                               comparison_module)
