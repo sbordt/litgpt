@@ -134,8 +134,13 @@ def initialize_mup_weights(fabric: L.Fabric, model, n_layer: int, n_embd: int) -
             nn.init.zeros_(module.bias)
 
     for mod in model.modules():
-        if isinstance(mod, (nn.Embedding, nn.Linear)):
+        if isinstance(mod, nn.Linear):
             mod.reset_parameters = partial(init_weights, mod, std=math.sqrt(2.0 / 5 / n_embd))
+
+    # we initialize the embedding layer with a constant standard deviation
+    for mod in model.modules():
+        if isinstance(mod, nn.Embedding):
+            mod.reset_parameters = partial(init_weights, mod, std=math.sqrt(2.0 / 5 / 256)) # this part is equivalent to the standard initialization for width=256
 
     # need a separate loop because `mod.proj` below is a `nn.Linear` too
     for mod in model.modules():
