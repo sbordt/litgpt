@@ -139,7 +139,6 @@ if __name__ == "__main__":
     # create the model config
     model_config = Config.from_name(args.model)
     model_config.norm_class_name = args.norm_class_name
-    model_config.norm_eps = 1e-6                    # the default of 1e-5 influences the scaling for widht=4096
     model_config.rmsnorm_elementwise_affine = False # disable elementwise affine for RMSNorm (we currently don't have experiments with RMSNorm)
     model_config.qk_norm = args.qk_norm
     model_config.layernorm_elementwise_affine = not args.layernorm_no_elementwise_affine
