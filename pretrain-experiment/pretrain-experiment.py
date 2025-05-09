@@ -8,7 +8,7 @@ from litgpt.monitor import ModuleMonitor
 from litgpt.pretrain import setup
 from litgpt.args import TrainArgs, EvalArgs
 
-from litgpt.mup import scale_width, apply_mup, initialize_mup_weights, initialize_standard_weights, print_parameter_info
+from litgpt.mup import scale_width, apply_mup, initialize_mup_weights, initialize_standard_weights, initialize_mup_weights_with_last_layer_sp
 
 from pathlib import Path
 import argparse
@@ -88,7 +88,7 @@ if __name__ == "__main__":
     parser.add_argument('--mup', action='store_true', help='Enable MUP (Maximal Update Parameterization)')
     parser.add_argument("--mup_input_alpha", type=float, default=1.0)
     parser.add_argument("--mup_output_alpha", type=float, default=1.0)
-    parser.add_argument("--force-sp-init", action="store_true", default=False, help="force the standard initialization for the model weights, even when using mup.")
+    parser.add_argument("--force-last-layer-sp-init", action="store_true", default=False, help="force the last layer initialization to be the same as the standard initialization, even when using muP")
     parser.add_argument("--precision", type=str, default="32-true")
     parser.add_argument("--tie_embeddings", action="store_true", default=False)
     parser.add_argument("--mse_loss", action="store_true", default=False, help="Use MSE loss instead of cross entropy")
@@ -158,12 +158,10 @@ if __name__ == "__main__":
         print_config_wrt_scaling(model_config)
         print("Number of model parameters: ", count_model_parameters(GPT(model_config))) 
 
-    # weight initialization for mup or sp
+    # weight initialization
     initialize_weights_fn = initialize_mup_weights if args.mup else initialize_standard_weights
-    if args.force_sp_init:
-        if SLURM_PROCID == 0:
-            print("Forcing standard initialization for the model weights...")
-        initialize_weights_fn = initialize_standard_weights
+    if args.mup and args.force_last_layer_sp_init:
+        initialize_weights_fn = initialize_mup_weights_with_last_layer_sp
 
     # optimizer configuration
     optimizer_args = {

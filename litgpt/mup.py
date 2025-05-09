@@ -99,7 +99,7 @@ def apply_mup(config : Config,
 
 
 def initialize_standard_weights(fabric: L.Fabric, model, n_layer: int, n_embd: int) -> None:
-    r"""Standard weight initialization. This is the GPT-NeoX weight initialization from pretrain.py.
+    r"""Standard weight initialization. This is the GPT-NeoX weight initialization.
     """
     from litgpt.model import LLaMAMLP, CausalSelfAttention
 
@@ -122,11 +122,14 @@ def initialize_standard_weights(fabric: L.Fabric, model, n_layer: int, n_embd: i
 
 
 def initialize_mup_weights(fabric: L.Fabric, model, n_layer: int, n_embd: int) -> None:
-    r"""muP weight initialization. We set the initial weights of the output layer (lm_head) to zero.
-    
-    Otherwise this is equal to the standard weight initialization.
+    r"""muP weight initialization. 
     """
     from litgpt.model import LLaMAMLP, CausalSelfAttention
+
+    print("Performing muP weight initialization...")
+    print(f"Model type: {type(model)}")
+    print(f"Model has config attribute: {hasattr(model, 'config')}")
+    print(f"Model has mup_args attribute: {hasattr(model.config, 'mup_args')}")
 
     def init_weights(module, std):
         nn.init.normal_(module.weight, mean=0.0, std=std)
@@ -147,16 +150,43 @@ def initialize_mup_weights(fabric: L.Fabric, model, n_layer: int, n_embd: int) -
         if isinstance(mod, (LLaMAMLP, CausalSelfAttention)):
             mod.proj.reset_parameters = partial(init_weights, mod.proj, std=(1 / math.sqrt(n_embd) / n_layer))
 
-    print("Performing muP weight initialization...")
+    # set the output layer weights to zero
+    model.lm_head.reset_parameters = partial(init_weights, model.lm_head, std=0.0)
+
+    if not isinstance(fabric.strategy, FSDPStrategy):
+        reset_parameters(model)
+
+
+def initialize_mup_weights_with_last_layer_sp(fabric: L.Fabric, model, n_layer: int, n_embd: int) -> None:
+    r"""muP weight initialization, except for the last layer.
+    
+    Otherwise this is equal to the standard weight initialization.
+    """
+    from litgpt.model import LLaMAMLP, CausalSelfAttention
+
+    print("Performing muP weight initialization, except for the last layer...")
     print(f"Model type: {type(model)}")
     print(f"Model has config attribute: {hasattr(model, 'config')}")
     print(f"Model has mup_args attribute: {hasattr(model.config, 'mup_args')}")
 
-    # set the output layer weights to zero
-    if has_mup_enabled(model.config):
-        model.lm_head.reset_parameters = partial(init_weights, model.lm_head, std=0.0)
-    else:
-        print("WARNING: MuP is not enabled. Ignoring MuP weight initialization.")
+    def init_weights(module, std):
+        nn.init.normal_(module.weight, mean=0.0, std=std)
+        if getattr(module, "bias", None) is not None:
+            nn.init.zeros_(module.bias)
+
+    for mod in model.modules():
+        if isinstance(mod, nn.Linear):
+            mod.reset_parameters = partial(init_weights, mod, std=math.sqrt(2.0 / 5 / n_embd))
+
+    # we initialize the embedding layer with a constant standard deviation
+    for mod in model.modules():
+        if isinstance(mod, nn.Embedding):
+            mod.reset_parameters = partial(init_weights, mod, std=math.sqrt(2.0 / 5 / 256)) # this part is equivalent to the standard initialization for width=256
+
+    # need a separate loop because `mod.proj` below is a `nn.Linear` too
+    for mod in model.modules():
+        if isinstance(mod, (LLaMAMLP, CausalSelfAttention)):
+            mod.proj.reset_parameters = partial(init_weights, mod.proj, std=(1 / math.sqrt(n_embd) / n_layer))
 
     if not isinstance(fabric.strategy, FSDPStrategy):
         reset_parameters(model)
