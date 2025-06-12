@@ -67,7 +67,7 @@ def setup(
     precision: Literal["bf16-true", "bf16-mixed", "32-true", None] = None,
     initial_checkpoint_dir: Optional[Path] = None,
     resume: Union[bool, Literal["auto"], Path] = False,
-    auto_cancel: bool = False,
+    auto_cancel: bool = False,                          # whether to cancel the training if the validation loss starts to diverge                   
     data: Optional[DataModule] = None,
     train: TrainArgs = TrainArgs(
         save_interval=1000,
@@ -81,21 +81,21 @@ def setup(
         tie_embeddings=False,
     ),
     eval: EvalArgs = EvalArgs(interval=1000, max_iters=100),
-    mse_loss: bool = False,
+    mse_loss: bool = False,                             # replace cross entropy loss with MSE loss (applies the softmax to the logits in both cases!)
     optimizer: Union[str, Dict] = "AdamW",
     devices: Union[int, str] = "auto",
     num_nodes: int = 1,
     tokenizer_dir: Optional[Path] = None,
     logger_name: Literal["wandb", "tensorboard", "csv"] = "wandb",
     seed: int = 42,
-    training_monitor :ModuleMonitor = None,             # added for the project. we montior activations, gradients and parameters during training
-    reference_model_type: str = None,                   # "init", "previous_step"        
-    with_activation_differences = False,
-    with_mup_coordinate_check = False,
+    training_monitor :ModuleMonitor = None,             # montior object to log activations, gradients and parameters during training
+    reference_model_type: str = None,                   # "init" or "previous_step"        
+    with_activation_differences = False,                # whether to monitor the activation differences between the model and the reference model
+    with_mup_coordinate_check = False,                  # wheter the perform a muP coordinate check (performs additional forward passes)
     with_compile: bool = True,                          # whether to compile the model
-    stop_after_step: int = None,                             # stop training after this number of steps (does not influence the training process, learning rate, etc.)
-    initialize_weights_fn: Optional[callable] = None,
-    get_lr_fn: Optional[callable] = None,
+    stop_after_step: int = None,                        # stop training after this number of steps (does not influence the training process, learning rate, etc.)
+    initialize_weights_fn: Optional[callable] = None,   # specify a custom function to initialize the model weights
+    get_lr_fn: Optional[callable] = None,               # specify a custom learning rate schedule
     use_pytorch_profiler: bool = False,
     logger_kwargs: Optional[Dict] = None,
 ):
@@ -425,6 +425,8 @@ def fit(
     if get_lr_fn is None:
         get_lr_fn = get_lr
 
+    loss_fn = mse_loss if mse_loss else chunked_cross_entropy
+
     model = state["model"]
     optimizer = state["optimizer"]
 
@@ -442,7 +444,7 @@ def fit(
         meta_model = GPT(model.config)
         x = torch.randint(0, 1, (train.micro_batch_size, meta_model.max_seq_length))
         model_fwd = lambda: meta_model(x)
-        model_loss = lambda y: chunked_cross_entropy(y, x, chunk_size=0)
+        model_loss = lambda y: loss_fn(y, x, chunk_size=0)
         measured_flops = measure_flops(meta_model, model_fwd, model_loss)
         fabric.print(f"Measured TFLOPs: {measured_flops * fabric.world_size / 1e12:.2f}")
         del meta_model, x
@@ -535,7 +537,7 @@ def fit(
                             _ = reference_model(local_input_ids)     
 
                     logits = model(local_input_ids)
-                    loss = chunked_cross_entropy(logits, local_targets)
+                    loss = loss_fn(logits, local_targets)
                     fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
                     if loss_sum is None:
@@ -555,7 +557,7 @@ def fit(
             with fabric.no_backward_sync(model, enabled=is_accumulating):
                 # (micro-) batch
                 logits = model(input_ids)
-                loss = chunked_cross_entropy(logits, targets)
+                loss = loss_fn(logits, targets)
                 fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
                 if with_mup_coordinate_check:
@@ -656,12 +658,18 @@ def fit(
         if val_dataloader is not None and not is_accumulating and state["step_count"] % eval.interval == 0:
             with training_monitor.no_monitoring():
                 t0 = time.perf_counter()
-                val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
+                val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters, loss_fn=loss_fn)
                 val_loss = val_loss.item()
+                if mse_loss:    # if we are using the mse loss, then we additionally validate with the cross-entropy loss
+                    ce_val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters, loss_fn=chunked_cross_entropy)
+                    ce_val_loss = ce_val_loss.item()
                 td = time.perf_counter() - t0
-
             fabric.print(f"iter {state['iter_num']}: val loss {val_loss:.4f}, val time: {td * 1000:.2f} ms")
-            metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
+            metrics = {"val_loss": val_loss}
+            if mse_loss:
+                metrics["val_ce_loss"] = ce_val_loss
+            else:
+                metrics["val_ppl"] = math.exp(val_loss) # log validation perplexity only for training with cross-entropy loss
             training_monitor.log_scalars(metrics) 
             fabric.log_dict(metrics, step=state["step_count"])
             fabric.barrier()
@@ -707,12 +715,14 @@ def mse_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     targets = targets.reshape(-1)                   # [B*S]    contain the index of the target token
     # now convert the targets to one-hot encoding
     targets = torch.nn.functional.one_hot(targets, num_classes=logits.size(-1)).float()  # [B*S, V]
-    # now we can compute the MSE loss
+    # apply the softmax to the logits to get probabilities
+    logits = torch.nn.functional.softmax(logits, dim=-1)  # [B*S, V]
+    # now apply the MSE loss
     return torch.nn.functional.mse_loss(logits, targets, reduction="mean")    
 
 
 @torch.no_grad()
-def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max_iters: int, verbose: bool = True, mse_loss: bool = False) -> torch.Tensor:
+def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max_iters: int, verbose: bool = True, loss_fn = chunked_cross_entropy) -> torch.Tensor:
     if max_iters == 0: # allow the user to skip validation
         return torch.tensor(42, device=fabric.device)
 
@@ -728,10 +738,7 @@ def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max
         input_ids = batch[:, 0 : model.max_seq_length].contiguous().long()
         targets = batch[:, 1 : (model.max_seq_length + 1)].contiguous().long()
         logits = model(input_ids)
-        if mse_loss:
-            loss = mse_loss(logits, targets)
-        else:
-            loss = chunked_cross_entropy(logits, targets)
+        loss = loss_fn(logits, targets)
         losses.append(loss)
 
     val_loss = torch.stack(losses).mean()
