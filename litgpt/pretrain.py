@@ -425,7 +425,7 @@ def fit(
     if get_lr_fn is None:
         get_lr_fn = get_lr
 
-    loss_fn = mse_loss if mse_loss else chunked_cross_entropy
+    loss_fn = mse_loss_fn if mse_loss else chunked_cross_entropy
 
     model = state["model"]
     optimizer = state["optimizer"]
@@ -709,7 +709,7 @@ def fit(
     torch.cuda.empty_cache()
 
 
-def mse_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+def mse_loss_fn(logits: torch.Tensor, targets: torch.Tensor, *args, **kwargs) -> torch.Tensor:
     """Mean squared error loss on the logits."""
     logits = logits.reshape(-1, logits.size(-1))    # [B*S, V] contains the logits for each token
     targets = targets.reshape(-1)                   # [B*S]    contain the index of the target token
