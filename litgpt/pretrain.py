@@ -425,7 +425,7 @@ def fit(
     if get_lr_fn is None:
         get_lr_fn = get_lr
 
-    loss_fn = mse_loss_fn if mse_loss else chunked_cross_entropy
+    loss_fn = chunked_mse_loss_fn if mse_loss else chunked_cross_entropy
 
     model = state["model"]
     optimizer = state["optimizer"]
@@ -718,7 +718,43 @@ def mse_loss_fn(logits: torch.Tensor, targets: torch.Tensor, *args, **kwargs) ->
     # apply the softmax to the logits to get probabilities
     logits = torch.nn.functional.softmax(logits, dim=-1)  # [B*S, V]
     # now apply the MSE loss
-    return torch.nn.functional.mse_loss(logits, targets, reduction="mean")    
+    return torch.nn.functional.mse_loss(logits, targets, reduction="sum")   
+
+
+def chunked_mse_loss_fn(logits: torch.Tensor, targets: torch.Tensor, chunk_size: int = 4096, *args, **kwargs) -> torch.Tensor:
+    """Mean squared error loss on the logits with chunked computation."""
+    # Reshape inputs
+    logits = logits.reshape(-1, logits.size(-1))  # [B*S, V]
+    targets = targets.reshape(-1)  # [B*S]
+    
+    # Split into chunks
+    logit_chunks = logits.split(chunk_size)
+    target_chunks = targets.split(chunk_size)
+    
+    loss_chunks = []
+    
+    for logit_chunk, target_chunk in zip(logit_chunks, target_chunks):
+        # Convert targets to one-hot for this chunk
+        targets_onehot = torch.nn.functional.one_hot(
+            target_chunk, 
+            num_classes=logit_chunk.size(-1)
+        ).float()  # [chunk_size, V]
+        
+        # Apply softmax to logits for this chunk
+        probs_chunk = torch.nn.functional.softmax(logit_chunk, dim=-1)  # [chunk_size, V]
+        
+        # Compute MSE loss for this chunk (reduction="none" to keep individual losses)
+        chunk_loss = torch.nn.functional.mse_loss(
+            probs_chunk, 
+            targets_onehot, 
+            reduction="none"
+        )
+        
+        loss_chunks.append(chunk_loss)
+    
+    # Concatenate all loss chunks and compute mean
+    all_losses = torch.cat(loss_chunks)  # This concatenates along the batch dimension
+    return all_losses.sum()  # Returns a scalar tensor with grad_fn
 
 
 @torch.no_grad()
