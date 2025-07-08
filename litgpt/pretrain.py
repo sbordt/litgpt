@@ -698,8 +698,15 @@ def fit(
     # Final validation
     if eval.final_validation:
         with training_monitor.no_monitoring():
-            val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
-            metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
+            val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters, loss_fn=loss_fn)
+            if mse_loss:    # if we are using the mse loss, then we additionally validate with the cross-entropy loss
+                ce_val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters, loss_fn=chunked_cross_entropy)
+                ce_val_loss = ce_val_loss.item()
+            metrics = {"val_loss": val_loss}
+            if mse_loss:
+                metrics["val_ce_loss"] = ce_val_loss
+            else:
+                metrics["val_ppl"] = math.exp(val_loss)
         training_monitor.log_scalars(metrics, force=True) 
         fabric.log_dict(metrics, step=state["iter_num"])
         fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
