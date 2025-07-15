@@ -709,7 +709,7 @@ def fit(
                 metrics["val_ppl"] = math.exp(val_loss)
         training_monitor.log_scalars(metrics, force=True) 
         fabric.log_dict(metrics, step=state["iter_num"])
-        fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f} | val ppl: {math.exp(val_loss):.3f}")
+        fabric.print(f"Final evaluation | val loss: {val_loss.item():.3f}")
 
     gc.collect()
     torch.cuda.ipc_collect()
