@@ -95,6 +95,7 @@ def setup(
     with_compile: bool = True,                          # whether to compile the model
     stop_after_step: int = None,                        # stop training after this number of steps (does not influence the training process, learning rate, etc.)
     initialize_weights_fn: Optional[callable] = None,   # specify a custom function to initialize the model weights
+    initialize_optimizer_fn: Optional[callable] = None, # specify a custom function to initialize the optimizer
     get_lr_fn: Optional[callable] = None,               # specify a custom learning rate schedule
     use_pytorch_profiler: bool = False,
     logger_kwargs: Optional[Dict] = None,
@@ -214,6 +215,7 @@ def setup(
         with_compile,
         stop_after_step,
         initialize_weights_fn,
+        initialize_optimizer_fn,
         get_lr_fn,
         use_pytorch_profiler,
     )
