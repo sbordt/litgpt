@@ -269,7 +269,7 @@ def instantiate_torch_sgd_full_align_optimizer(optimizer: dict, model, width_mul
            or n.endswith('norm_1.bias') or n.endswith('norm_2.bias') \
            or n.endswith('q_norm.weight') or n.endswith('k_norm.weight') \
            or n.endswith('q_norm.bias') or n.endswith('k_norm.bias') \
-           or n.endswith('ln_f.weight'): # ln_f is the norm before the output layer
+           or n.endswith('ln_f.weight') or n.endswith('ln_f.bias'): # ln_f is the norm before the output layer
             input_like_params.append(p) 
         # hidden params: the weights in attention and mlp layers
         elif n.endswith('attn.weight') or n.endswith('fc.weight') or n.endswith('proj.weight'):
