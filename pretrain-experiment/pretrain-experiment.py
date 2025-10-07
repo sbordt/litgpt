@@ -8,7 +8,7 @@ from litgpt.monitor import ModuleMonitor
 from litgpt.pretrain import setup
 from litgpt.args import TrainArgs, EvalArgs
 
-from litgpt.mup import scale_width, apply_mup, initialize_mup_weights, initialize_standard_weights, initialize_mup_weights_with_last_layer_sp
+from litgpt.mup import scale_width, apply_mup, initialize_mup_weights, initialize_standard_weights, initialize_mup_weights_with_last_layer_sp, instantiate_torch_sgd_full_align_optimizer
 
 from pathlib import Path
 import argparse
@@ -24,6 +24,7 @@ from DclmData import DclmData
 import math
 
 import logging
+from functools import partial
 
 import torch
 torch.set_float32_matmul_precision('high')  
@@ -89,6 +90,7 @@ if __name__ == "__main__":
     parser.add_argument("--mup_input_alpha", type=float, default=1.0)
     parser.add_argument("--mup_output_alpha", type=float, default=1.0)
     parser.add_argument("--force-last-layer-sp-init", action="store_true", default=False, help="force the last layer initialization to be the same as the standard initialization, even when using muP")
+    parser.add_argument("--sgd-full-align", action="store_true", default=False, help="use the SGD full align optimizer")
     parser.add_argument("--precision", type=str, default="32-true")
     parser.add_argument("--tie_embeddings", action="store_true", default=False)
     parser.add_argument("--mse_loss", action="store_true", default=False, help="Use MSE loss instead of cross entropy")
@@ -182,6 +184,11 @@ if __name__ == "__main__":
             }
         }
 
+    # optimizer initialization function
+    initialize_optimizer_fn = None
+    if args.sgd_full_align:
+        initialize_optimizer_fn = partial(instantiate_torch_sgd_full_align_optimizer, width_multiplier=args.width/256) # hard-coded for our experiments with base width 256!
+
     # dataset
     data = DclmData(data_path=Path(args.data_dir), seed=args.data_seed)
 
@@ -266,6 +273,7 @@ if __name__ == "__main__":
         stop_after_step= args.stop_step,
         use_pytorch_profiler = args.use_pytorch_profiler,
         initialize_weights_fn = initialize_weights_fn,
+        initialize_optimizer_fn = initialize_optimizer_fn,
         logger_kwargs = {
             "name": run_name,
             "project": experiment_name,

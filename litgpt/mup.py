@@ -26,6 +26,7 @@ from functools import partial
 
 import torch.nn as nn
 import inspect
+import numpy as np
 
 
 @dataclass
@@ -231,6 +232,65 @@ def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
         {"params": other_params, "lr_scale": 1, "weight_decay": weight_decay},
     ]
     print(f"Number of parameters with muP learning rate scaling: {sum(p.numel() for p in mup_params if p.requires_grad)}")
+
+    return instantiate_class(optim_groups, optimizer)
+
+
+def instantiate_torch_sgd_full_align_optimizer(optimizer: dict, model, width_multiplier: float, **kwargs):
+    """ Train with SGD full align, see Table 1 in https://arxiv.org/pdf/2407.05872
+    """
+    optimizer = dict(optimizer)
+    class_module, class_name = optimizer["class_path"].rsplit(".", 1)
+    module = __import__(class_module, fromlist=[class_name])
+    optimizer_cls = getattr(module, class_name)
+
+    # check that optimizer_cls is torch.optim.SGD
+    from torch.optim import SGD
+    if optimizer_cls != SGD:
+        raise ValueError("instantiate_torch_sgd_full_align_optimizer only supports torch.optim.SGD")
+
+    valid_params = set(inspect.signature(optimizer_cls).parameters)
+    kwargs = {key: value for key, value in dict(kwargs).items() if key in valid_params}
+    optimizer["init_args"].update(kwargs)
+
+    # define parameter groups for mup
+    weight_decay = optimizer["init_args"].get("weight_decay", 0.0)
+
+    param_dict = {pn: p for pn, p in model.named_parameters()}
+    param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+    input_like_params = []
+    hidden_params = []
+    output_params = []
+    for n, p in param_dict.items():
+        # input-like params: input embedding, layer norm, all biases
+        if n.endswith('wte.weight') or n.endswith('attn.bias') \
+           or n.endswith('proj.bias') or n.endswith('fc.bias') \
+           or n.endswith('norm_1.weight') or n.endswith('norm_2.weight') \
+           or n.endswith('norm_1.bias') or n.endswith('norm_2.bias') \
+           or n.endswith('q_norm.weight') or n.endswith('k_norm.weight') \
+           or n.endswith('q_norm.bias') or n.endswith('k_norm.bias') \
+           or n.endswith('ln_f.weight'): # ln_f is the norm before the output layer
+            input_like_params.append(p) 
+        # hidden params: the weights in attention and mlp layers
+        elif n.endswith('attn.weight') or n.endswith('fc.weight') or n.endswith('proj.weight'):
+            hidden_params.append(p)
+        # output layer weights
+        elif n.endswith('lm_head.weight'):
+            output_params.append(p)
+        else:
+            raise ValueError(f"Unknown Parameter {n}. Please check the parameter classification in instantiate_torch_sgd_full_align_optimizer.")
+    optim_groups = [
+        # we set a custom parameter lr_scale for each group
+        # the training code is responsible for using this scale factor after
+        # scheduling the overall leraning rate for the current step
+        # we keep the same effective weight decay for all parameters 
+        {"params": input_like_params, "lr_scale": np.sqrt(width_multiplier), "weight_decay": weight_decay / np.sqrt(width_multiplier)},
+        {"params": hidden_params, "lr_scale": 1 / np.sqrt(width_multiplier), "weight_decay": weight_decay * np.sqrt(width_multiplier)},        
+        {"params": output_params, "lr_scale": 1 / width_multiplier, "weight_decay": weight_decay * width_multiplier},
+    ]
+    print(f"Number of input-like parameters: {sum(p.numel() for p in input_like_params if p.requires_grad)}")
+    print(f"Number of hidden parameters: {sum(p.numel() for p in hidden_params if p.requires_grad)}")
+    print(f"Number of output parameters: {sum(p.numel() for p in output_params if p.requires_grad)}")
 
     return instantiate_class(optim_groups, optimizer)
 

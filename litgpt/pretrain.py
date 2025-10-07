@@ -242,6 +242,7 @@ def main(
     with_compile: bool = True,
     stop_after_step: Optional[int] = None,
     initialize_weights_fn: Optional[callable] = None,
+    initialize_optimizer_fn: Optional[callable] = None,
     get_lr_fn: Optional[callable] = None,
     use_pytorch_profiler: bool = False,
 ) -> None:
@@ -303,10 +304,13 @@ def main(
                 reference_model.load_state_dict(model.state_dict())
 
     extra_kwargs = {"fused": fabric.device.type == "cuda"}
-    if has_mup_enabled(config):
-        optimizer = instantiate_torch_mup_optimizer(optimizer, model, **extra_kwargs)
+    if initialize_optimizer_fn is not None:
+        optimizer = initialize_optimizer_fn(optimizer, model, **extra_kwargs)
     else:
-        optimizer = instantiate_torch_optimizer(optimizer, model.parameters(), **extra_kwargs)
+        if has_mup_enabled(config):
+            optimizer = instantiate_torch_mup_optimizer(optimizer, model, **extra_kwargs)
+        else:
+            optimizer = instantiate_torch_optimizer(optimizer, model.parameters(), **extra_kwargs)
     optimizer = fabric.setup_optimizers(optimizer)
     print(f"Using an optimizer with {len(optimizer.param_groups)} parameter groups.")
 
@@ -509,7 +513,7 @@ def fit(
         lr = get_lr_fn(optimizer.defaults["lr"], state["iter_num"], warmup_iters, max_iters, train.min_lr, state["step_count"]+1)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
-            ### Begin muP code ###
+            ### Begin muP code (this is general layer-wise learning rates code) ###
             if "lr_scale" in param_group:
                 param_group["lr"] *= param_group["lr_scale"]
             ### End muP code ###
