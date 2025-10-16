@@ -607,8 +607,21 @@ def fit(
         model.ln_f_output = output.detach()
         print("L2 Norm of ln_f output difference:", torch.norm(model.ln_f_output - reference_model_ln_f_output).item())
 
+    def reference_model_any_module_forward_hook(module, input, output):
+        global reference_model_any_module_output
+        reference_model_any_module_output = output.detach()
+
+    def model_any_module_forward_hook(module, input, output):
+        global model_any_module_output
+        model.any_module_output = output.detach()
+        print("L2 Norm of any module output difference:", torch.norm(model.any_module_output - reference_model_any_module_output).item())
+
     model.transformer.ln_f.register_forward_hook(model_ln_f_forwad_hook)
     reference_model.transformer.ln_f.register_forward_hook(reference_model_ln_f_forward_hook)
+
+    # register at some random module
+    model.transformer.h[3].mlp.register_forward_hook(model_any_module_forward_hook)
+    reference_model.transformer.h[3].mlp.register_forward_hook(reference_model_any_module_forward_hook)
 
     # profile the training with the pytorch profiler (optional)
     if use_pytorch_profiler:
