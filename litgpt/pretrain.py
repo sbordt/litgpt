@@ -60,6 +60,131 @@ from litgpt.mup import has_mup_enabled, instantiate_torch_mup_optimizer
 import pickle
 
 
+def check_modules_equal(module1: nn.Module, module2: nn.Module, 
+                        rtol: float = 1e-5, atol: float = 1e-8,
+                        check_device: bool = False) -> bool:
+    """
+    Check if two PyTorch modules have the same architecture and parameters.
+    
+    Args:
+        module1: First PyTorch module
+        module2: Second PyTorch module
+        rtol: Relative tolerance for parameter comparison (default: 1e-5)
+        atol: Absolute tolerance for parameter comparison (default: 1e-8)
+        check_device: Whether to check if parameters are on the same device (default: False)
+    
+    Returns:
+        True if modules are identical, False otherwise
+    """
+    import logging
+
+    # Configure logger
+    logger = logging.getLogger(__name__)
+    
+    # Check module class type
+    if type(module1) != type(module2):
+        logger.error(f"Module types differ: {type(module1).__name__} vs {type(module2).__name__}")
+        return False
+    
+    # Check string representation (gives a good overview of architecture)
+    if str(module1) != str(module2):
+        logger.error(f"Module architecture differs:\nModule1:\n{str(module1)}\nModule2:\n{str(module2)}")
+        return False
+    
+    # Get state dictionaries
+    state_dict1 = module1.state_dict()
+    state_dict2 = module2.state_dict()
+    
+    # Check if they have the same keys (parameter and buffer names)
+    keys1 = set(state_dict1.keys())
+    keys2 = set(state_dict2.keys())
+    
+    if keys1 != keys2:
+        missing_in_2 = keys1 - keys2
+        missing_in_1 = keys2 - keys1
+        if missing_in_2:
+            logger.error(f"Missing in module2: {missing_in_2}")
+        if missing_in_1:
+            logger.error(f"Missing in module1: {missing_in_1}")
+        return False
+    
+    # Check each parameter and buffer
+    for key in keys1:
+        param1 = state_dict1[key]
+        param2 = state_dict2[key]
+        
+        # Check shape
+        if param1.shape != param2.shape:
+            logger.error(f"Shape mismatch for '{key}': {param1.shape} vs {param2.shape}")
+            return False
+        
+        # Check dtype
+        if param1.dtype != param2.dtype:
+            logger.error(f"Dtype mismatch for '{key}': {param1.dtype} vs {param2.dtype}")
+            return False
+        
+        # Check device (optional)
+        if check_device and param1.device != param2.device:
+            logger.error(f"Device mismatch for '{key}': {param1.device} vs {param2.device}")
+            return False
+        
+        # Check values
+        if not torch.allclose(param1, param2, rtol=rtol, atol=atol):
+            max_diff = torch.max(torch.abs(param1 - param2.to(param1.device))).item()
+            logger.error(f"Value mismatch for '{key}': max difference = {max_diff}")
+            return False
+    
+    # Check module attributes (like dropout rate, etc.)
+    # This is done by checking named_modules
+    modules1 = dict(module1.named_modules())
+    modules2 = dict(module2.named_modules())
+    
+    if set(modules1.keys()) != set(modules2.keys()):
+        logger.error("Submodule structure differs")
+        return False
+    
+    # Check specific attributes for common layer types
+    for name in modules1.keys():
+        m1 = modules1[name]
+        m2 = modules2[name]
+        
+        if type(m1) != type(m2):
+            logger.error(f"Submodule type mismatch at '{name}': {type(m1).__name__} vs {type(m2).__name__}")
+            return False
+        
+        # Check common attributes based on module type
+        if isinstance(m1, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+            if m1.in_features != m2.in_features or m1.out_features != m2.out_features:
+                logger.error(f"Feature size mismatch at '{name}'")
+                return False
+            if m1.bias is None != m2.bias is None:
+                logger.error(f"Bias existence mismatch at '{name}'")
+                return False
+                
+        elif isinstance(m1, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+            attrs_to_check = ['kernel_size', 'stride', 'padding', 'dilation', 'groups']
+            for attr in attrs_to_check:
+                if getattr(m1, attr) != getattr(m2, attr):
+                    logger.error(f"Conv attribute '{attr}' mismatch at '{name}'")
+                    return False
+                    
+        elif isinstance(m1, nn.Dropout):
+            if m1.p != m2.p:
+                logger.error(f"Dropout rate mismatch at '{name}': {m1.p} vs {m2.p}")
+                return False
+                
+        elif isinstance(m1, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+            if m1.num_features != m2.num_features:
+                logger.error(f"BatchNorm features mismatch at '{name}'")
+                return False
+            if m1.eps != m2.eps or m1.momentum != m2.momentum:
+                logger.error(f"BatchNorm parameters mismatch at '{name}'")
+                return False
+    
+    logger.info("Modules are identical")
+    return True
+
+
 def setup(
     model_name: str,
     model_config: Optional[Config] = None,
@@ -274,6 +399,7 @@ def main(
 
     if reference_model is not None:
         reference_model.load_state_dict(model.state_dict()) # initialize the reference model to the model at time step zero
+        check_modules_equal(model, reference_model) # sanity check
 
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters: {num_parameters(model):,}")
@@ -296,6 +422,7 @@ def main(
 
     if reference_model is not None:
         reference_model = fabric.setup(reference_model)
+        check_modules_equal(model, reference_model) # again sanity check
 
     # lightning performs re-initialization of model weights with FSDP.
     # we need to re-load the weights of the reference model
