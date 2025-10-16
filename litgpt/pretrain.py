@@ -632,13 +632,20 @@ def fit(
 
     def model_ln_f_forwad_hook(module, input, output):
         global model_ln_f_output
-        model.ln_f_output = output.detach()
-        print("L2 Norm of ln_f output difference:", torch.norm(model.ln_f_output - reference_model_ln_f_output).item())
+        model_ln_f_output = output.detach()
+        print("L2 Norm of ln_f output difference:", torch.norm(model_ln_f_output - reference_model_ln_f_output).item())
         print(f"Model ln_f input shape: {model_ln_f_input.shape}")
         print(f"Reference ln_f input shape: {reference_model_ln_f_input.shape}")
         print(f"Model ln_f input dtype: {model_ln_f_input.dtype}")
         print(f"Reference ln_f input dtype: {reference_model_ln_f_input.dtype}")
         print("L2 Norm of ln_f input difference:", torch.norm(model_ln_f_input - reference_model_ln_f_input).item())
+
+        manual_model_out = debug_layernorm(model.transformer.ln_f, model_ln_f_input)
+        manual_ref_out = debug_layernorm(reference_model.transformer.ln_f, reference_model_ln_f_input)
+        print(f"Manual computation difference: {torch.norm(manual_model_out - manual_ref_out).item()}")
+        # compare manual with actual output
+        print(f"Manual vs actual model output difference: {torch.norm(manual_model_out - model_ln_f_output).item()}")
+        print(f"Manual vs actual reference output difference: {torch.norm(manual_ref_out - reference_model_ln_f_output).item()}")
 
     def reference_model_any_module_forward_hook(module, input, output):
         global reference_model_any_module_output
@@ -673,7 +680,6 @@ def fit(
             output = output + bias
         return output
 
-
     # DEBUGGING: now also register hooks for the ln_f input difference
     def reference_model_ln_f_forward_pre_hook(module, input):
         global reference_model_ln_f_input
@@ -683,13 +689,6 @@ def fit(
         global model_ln_f_input
         model_ln_f_input = input[0].detach()
         print("L2 Norm of ln_f input difference:", torch.norm(model_ln_f_input - reference_model_ln_f_input).item())
-
-        manual_model_out = debug_layernorm(model.transformer.ln_f, model_ln_f_input)
-        manual_ref_out = debug_layernorm(reference_model.transformer.ln_f, reference_model_ln_f_input)
-        print(f"Manual computation difference: {torch.norm(manual_model_out - manual_ref_out).item()}")
-        # compare manual with actual output
-        print(f"Manual vs actual model output difference: {torch.norm(manual_model_out - model.ln_f_output).item()}")
-        print(f"Manual vs actual reference output difference: {torch.norm(manual_ref_out - reference_model_ln_f_output).item()}")
 
     model.transformer.ln_f.register_forward_pre_hook(model_ln_f_forward_pre_hook)
     reference_model.transformer.ln_f.register_forward_pre_hook(reference_model_ln_f_forward_pre_hook)
