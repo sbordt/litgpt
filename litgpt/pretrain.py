@@ -597,6 +597,10 @@ def fit(
 
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
+    model.train()
+    if reference_model is not None:
+        reference_model.train()
+
     # print ln_f weights in both models
     print("L2 Norm of ln_f weights difference:", torch.norm(model.transformer.ln_f.weight - reference_model.transformer.ln_f.weight).item())
     print(model.transformer.ln_f.weight)
