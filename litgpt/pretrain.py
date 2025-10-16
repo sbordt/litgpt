@@ -650,15 +650,15 @@ def fit(
     def reference_model_ln_f_forward_hook(module, input, output):
         global reference_model_ln_f_output
         reference_model_ln_f_output = output.detach()
-        print(reference_model_ln_f_output)
-        print(f"Reference ln_f output shape: {reference_model_ln_f_output.shape}")
+        print("REFERENCE HOOK FIRED")
+        print(f"Ref output first 5 values: {output.flatten()[:5]}")
 
     def model_ln_f_forwad_hook(module, input, output):
         global model_ln_f_output
         model_ln_f_output = output.detach()
-        print(model_ln_f_output)
-        print(f"Model ln_f output shape: {model_ln_f_output.shape}")
-
+        print("MODEL HOOK FIRED")
+        print(f"Model output first 5 values: {output.flatten()[:5]}")
+        
         #print("L2 Norm of ln_f output difference:", torch.norm(model_ln_f_output - reference_model_ln_f_output).item())
         #print(f"Model ln_f input shape: {model_ln_f_input.shape}")
         #print(f"Reference ln_f input shape: {reference_model_ln_f_input.shape}")
