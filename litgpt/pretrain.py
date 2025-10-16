@@ -418,10 +418,12 @@ def main(
     # torch.compile the model and setup for distributed training
     if with_compile:
         model = torch.compile(model)
-    model = fabric.setup(model)
+    #model = fabric.setup(model)
+    model.to(fabric.device)
 
     if reference_model is not None:
-        reference_model = fabric.setup(reference_model)
+        # reference_model = fabric.setup(reference_model)
+        reference_model.to(fabric.device)
         check_modules_equal(model, reference_model) # again sanity check
 
     # lightning performs re-initialization of model weights with FSDP.
