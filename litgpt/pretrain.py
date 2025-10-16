@@ -665,6 +665,9 @@ def fit(
     model.transformer.h[3].mlp.register_forward_hook(model_any_module_forward_hook)
     reference_model.transformer.h[3].mlp.register_forward_hook(reference_model_any_module_forward_hook)
 
+    print(f"Model has muP: {has_mup_enabled(model.config)}")
+    print(f"Reference has muP: {has_mup_enabled(reference_model.config)}")
+
     # DEBUGGING: manual computation of the ln_f output
     def debug_layernorm(ln_module, input_tensor):
         """Manually compute layernorm to debug"""
