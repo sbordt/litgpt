@@ -658,7 +658,8 @@ def fit(
         model_ln_f_output = output.detach()
         print("MODEL HOOK FIRED")
         print(f"Model output first 5 values: {output.flatten()[:5]}")
-        
+        print(f"Stored ref output first 5 values: {reference_model_ln_f_output.flatten()[:5]}")
+
         #print("L2 Norm of ln_f output difference:", torch.norm(model_ln_f_output - reference_model_ln_f_output).item())
         #print(f"Model ln_f input shape: {model_ln_f_input.shape}")
         #print(f"Reference ln_f input shape: {reference_model_ln_f_input.shape}")
