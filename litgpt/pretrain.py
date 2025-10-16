@@ -649,13 +649,13 @@ def fit(
     # DEBUGGING: ln_f bug
     def reference_model_ln_f_forward_hook(module, input, output):
         global reference_model_ln_f_output
-        reference_model_ln_f_output = output.detach()
+        reference_model_ln_f_output = output.detach().clone()
         print("REFERENCE HOOK FIRED")
         print(f"Ref output first 5 values: {output.flatten()[:5]}")
 
     def model_ln_f_forwad_hook(module, input, output):
         global model_ln_f_output
-        model_ln_f_output = output.detach()
+        model_ln_f_output = output.detach().clone()
         print("MODEL HOOK FIRED")
         print(f"Model output first 5 values: {output.flatten()[:5]}")
         print(f"Stored ref output first 5 values: {reference_model_ln_f_output.flatten()[:5]}")
@@ -676,11 +676,11 @@ def fit(
 
     def reference_model_any_module_forward_hook(module, input, output):
         global reference_model_any_module_output
-        reference_model_any_module_output = output.detach()
+        reference_model_any_module_output = output.detach().clone()
 
     def model_any_module_forward_hook(module, input, output):
         global model_any_module_output
-        model.any_module_output = output.detach()
+        model.any_module_output = output.detach().clone()
         print("L2 Norm of any module output difference:", torch.norm(model.any_module_output - reference_model_any_module_output).item())
 
     model.transformer.ln_f.register_forward_hook(model_ln_f_forwad_hook)
@@ -713,11 +713,11 @@ def fit(
     # DEBUGGING: now also register hooks for the ln_f input difference
     def reference_model_ln_f_forward_pre_hook(module, input):
         global reference_model_ln_f_input
-        reference_model_ln_f_input = input[0].detach()
+        reference_model_ln_f_input = input[0].detach().clone()
 
     def model_ln_f_forward_pre_hook(module, input):
         global model_ln_f_input
-        model_ln_f_input = input[0].detach()
+        model_ln_f_input = input[0].detach().clone()
         print("L2 Norm of ln_f input difference:", torch.norm(model_ln_f_input - reference_model_ln_f_input).item())
 
     model.transformer.ln_f.register_forward_pre_hook(model_ln_f_forward_pre_hook)
