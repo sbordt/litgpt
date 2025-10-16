@@ -420,8 +420,8 @@ class ModuleMonitor:
         # assert that module_name is a string
         module_name = self._module_name(module, is_reference)
 
-        # detach activations from the graph but keep on the device
-        activations = activations.detach()
+        # create an independent copy of the activations
+        activations = activations.detach().clone()
 
         # if called with the activations of the reference module, store them in the reference_module_activations dict
         if is_reference:
@@ -619,8 +619,8 @@ class ModuleMonitor:
                 return
             
             # detach input and output from the computational graph
-            input = tuple(i.detach() if isinstance(i, torch.Tensor) else i for i in input)
-            output = output.detach()
+            input = tuple(i.detach().clone() if isinstance(i, torch.Tensor) else i for i in input)
+            output = output.detach().clone()
 
             # move the input and output to the CPU if cpu_offload is set
             if self.cpu_offload:
@@ -643,7 +643,7 @@ class ModuleMonitor:
                 return
             
             # same as for _get_mup_forward_hook, but we already have the activations, so we only need to store the inputs
-            input = tuple(i.detach() if isinstance(i, torch.Tensor) else i for i in input)
+            input = tuple(i.detach().clone() if isinstance(i, torch.Tensor) else i for i in input)
 
             # move the input and output to the CPU if cpu_offload is set
             if self.cpu_offload:
@@ -760,13 +760,13 @@ class ModuleMonitor:
 
         # the monitoring here is VERY inefficient, as we have to recompute the attention weights
         # first, we detach all tensors from the computational graph
-        query = query.detach()
-        key = key.detach()
-        value = value.detach()
+        query = query.detach().clone()
+        key = key.detach().clone()
+        value = value.detach().clone()
         if activation is not None:
-            activation = activation.detach()
+            activation = activation.detach().clone()
         if attn_mask is not None:
-            attn_mask = attn_mask.detach()
+            attn_mask = attn_mask.detach().clone()
 
         # now we follow the reference implementation, see https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
         L, S = query.size(-2), key.size(-2)

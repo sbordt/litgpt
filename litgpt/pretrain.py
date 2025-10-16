@@ -60,131 +60,6 @@ from litgpt.mup import has_mup_enabled, instantiate_torch_mup_optimizer
 import pickle
 
 
-def check_modules_equal(module1: nn.Module, module2: nn.Module, 
-                        rtol: float = 1e-5, atol: float = 1e-8,
-                        check_device: bool = False) -> bool:
-    """
-    Check if two PyTorch modules have the same architecture and parameters.
-    
-    Args:
-        module1: First PyTorch module
-        module2: Second PyTorch module
-        rtol: Relative tolerance for parameter comparison (default: 1e-5)
-        atol: Absolute tolerance for parameter comparison (default: 1e-8)
-        check_device: Whether to check if parameters are on the same device (default: False)
-    
-    Returns:
-        True if modules are identical, False otherwise
-    """
-    import logging
-
-    # Configure logger
-    logger = logging.getLogger(__name__)
-    
-    # Check module class type
-    if type(module1) != type(module2):
-        logger.error(f"Module types differ: {type(module1).__name__} vs {type(module2).__name__}")
-        return False
-    
-    # Check string representation (gives a good overview of architecture)
-    if str(module1) != str(module2):
-        logger.error(f"Module architecture differs:\nModule1:\n{str(module1)}\nModule2:\n{str(module2)}")
-        return False
-    
-    # Get state dictionaries
-    state_dict1 = module1.state_dict()
-    state_dict2 = module2.state_dict()
-    
-    # Check if they have the same keys (parameter and buffer names)
-    keys1 = set(state_dict1.keys())
-    keys2 = set(state_dict2.keys())
-    
-    if keys1 != keys2:
-        missing_in_2 = keys1 - keys2
-        missing_in_1 = keys2 - keys1
-        if missing_in_2:
-            logger.error(f"Missing in module2: {missing_in_2}")
-        if missing_in_1:
-            logger.error(f"Missing in module1: {missing_in_1}")
-        return False
-    
-    # Check each parameter and buffer
-    for key in keys1:
-        param1 = state_dict1[key]
-        param2 = state_dict2[key]
-        
-        # Check shape
-        if param1.shape != param2.shape:
-            logger.error(f"Shape mismatch for '{key}': {param1.shape} vs {param2.shape}")
-            return False
-        
-        # Check dtype
-        if param1.dtype != param2.dtype:
-            logger.error(f"Dtype mismatch for '{key}': {param1.dtype} vs {param2.dtype}")
-            return False
-        
-        # Check device (optional)
-        if check_device and param1.device != param2.device:
-            logger.error(f"Device mismatch for '{key}': {param1.device} vs {param2.device}")
-            return False
-        
-        # Check values
-        if not torch.allclose(param1, param2, rtol=rtol, atol=atol):
-            max_diff = torch.max(torch.abs(param1 - param2.to(param1.device))).item()
-            logger.error(f"Value mismatch for '{key}': max difference = {max_diff}")
-            return False
-    
-    # Check module attributes (like dropout rate, etc.)
-    # This is done by checking named_modules
-    modules1 = dict(module1.named_modules())
-    modules2 = dict(module2.named_modules())
-    
-    if set(modules1.keys()) != set(modules2.keys()):
-        logger.error("Submodule structure differs")
-        return False
-    
-    # Check specific attributes for common layer types
-    for name in modules1.keys():
-        m1 = modules1[name]
-        m2 = modules2[name]
-        
-        if type(m1) != type(m2):
-            logger.error(f"Submodule type mismatch at '{name}': {type(m1).__name__} vs {type(m2).__name__}")
-            return False
-        
-        # Check common attributes based on module type
-        if isinstance(m1, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-            if m1.in_features != m2.in_features or m1.out_features != m2.out_features:
-                logger.error(f"Feature size mismatch at '{name}'")
-                return False
-            if m1.bias is None != m2.bias is None:
-                logger.error(f"Bias existence mismatch at '{name}'")
-                return False
-                
-        elif isinstance(m1, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-            attrs_to_check = ['kernel_size', 'stride', 'padding', 'dilation', 'groups']
-            for attr in attrs_to_check:
-                if getattr(m1, attr) != getattr(m2, attr):
-                    logger.error(f"Conv attribute '{attr}' mismatch at '{name}'")
-                    return False
-                    
-        elif isinstance(m1, nn.Dropout):
-            if m1.p != m2.p:
-                logger.error(f"Dropout rate mismatch at '{name}': {m1.p} vs {m2.p}")
-                return False
-                
-        elif isinstance(m1, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
-            if m1.num_features != m2.num_features:
-                logger.error(f"BatchNorm features mismatch at '{name}'")
-                return False
-            if m1.eps != m2.eps or m1.momentum != m2.momentum:
-                logger.error(f"BatchNorm parameters mismatch at '{name}'")
-                return False
-    
-    logger.info("Modules are identical")
-    return True
-
-
 def setup(
     model_name: str,
     model_config: Optional[Config] = None,
@@ -399,7 +274,6 @@ def main(
 
     if reference_model is not None:
         reference_model.load_state_dict(model.state_dict()) # initialize the reference model to the model at time step zero
-        check_modules_equal(model, reference_model) # sanity check
 
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters: {num_parameters(model):,}")
@@ -418,13 +292,11 @@ def main(
     # torch.compile the model and setup for distributed training
     if with_compile:
         model = torch.compile(model)
-    #model = fabric.setup(model)
-    model.to(fabric.device)
+    model = fabric.setup(model)
 
     if reference_model is not None:
-        # reference_model = fabric.setup(reference_model)
-        reference_model.to(fabric.device)
-        check_modules_equal(model, reference_model) # again sanity check
+        reference_model = fabric.setup(reference_model)
+        reference_model.train()
 
     # lightning performs re-initialization of model weights with FSDP.
     # we need to re-load the weights of the reference model
@@ -599,130 +471,6 @@ def fit(
 
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
-    # After setting up both models and before the training loop
-    config = model.config
-    if reference_model is not None:
-        # Create a fresh LayerNorm with the same config
-        new_ln_f = config.norm_class(config.n_embd, eps=config.norm_eps)
-        new_ln_f = new_ln_f.to(fabric.device)
-        
-        # Copy the weights and bias from the model's ln_f
-        new_ln_f.load_state_dict(model.transformer.ln_f.state_dict())
-        
-        # Replace the reference model's ln_f
-        reference_model.transformer.ln_f = new_ln_f
-        
-        # Verify it works
-        test_input = torch.randn(2, 4, config.n_embd, device=fabric.device)
-        model_output = model.transformer.ln_f(test_input)
-        ref_output = reference_model.transformer.ln_f(test_input)
-        print(f"After replacement, ln_f difference: {torch.norm(model_output - ref_output).item()}")
-
-    # put both models in training mode
-    model.train()
-    if reference_model is not None:
-        reference_model.train()
-
-    print(f"Model ln_f eps: {model.transformer.ln_f.eps}")
-    print(f"Reference ln_f eps: {reference_model.transformer.ln_f.eps}")
-
-    print(f"Model ln_f normalized_shape: {model.transformer.ln_f.normalized_shape}")
-    print(f"Reference ln_f normalized_shape: {reference_model.transformer.ln_f.normalized_shape}")
-
-    print(f"Model ln_f elementwise_affine: {model.transformer.ln_f.elementwise_affine}")
-    print(f"Reference ln_f elementwise_affine: {reference_model.transformer.ln_f.elementwise_affine}")
-
-    # print ln_f weights in both models
-    print("L2 Norm of ln_f weights difference:", torch.norm(model.transformer.ln_f.weight - reference_model.transformer.ln_f.weight).item())
-    print(model.transformer.ln_f.weight)
-    print(reference_model.transformer.ln_f.weight)
-    print(model.transformer.h[0].norm_1.weight)
-    print(reference_model.transformer.h[0].norm_1.weight)
-    
-    # now the same for bias
-    print("L2 Norm of ln_f bias difference:", torch.norm(model.transformer.ln_f.bias - reference_model.transformer.ln_f.bias).item())
-    print(model.transformer.ln_f.bias)
-    print(reference_model.transformer.ln_f.bias)
-    print(model.transformer.h[0].norm_1.bias)
-    print(reference_model.transformer.h[0].norm_1.bias)
-
-    # DEBUGGING: ln_f bug
-    def reference_model_ln_f_forward_hook(module, input, output):
-        global reference_model_ln_f_output
-        reference_model_ln_f_output = output.detach().clone()
-        print("REFERENCE HOOK FIRED")
-        print(f"Ref output first 5 values: {output.flatten()[:5]}")
-
-    def model_ln_f_forwad_hook(module, input, output):
-        global model_ln_f_output
-        model_ln_f_output = output.detach().clone()
-        print("MODEL HOOK FIRED")
-        print(f"Model output first 5 values: {output.flatten()[:5]}")
-        print(f"Stored ref output first 5 values: {reference_model_ln_f_output.flatten()[:5]}")
-
-        #print("L2 Norm of ln_f output difference:", torch.norm(model_ln_f_output - reference_model_ln_f_output).item())
-        #print(f"Model ln_f input shape: {model_ln_f_input.shape}")
-        #print(f"Reference ln_f input shape: {reference_model_ln_f_input.shape}")
-        #print(f"Model ln_f input dtype: {model_ln_f_input.dtype}")
-        #print(f"Reference ln_f input dtype: {reference_model_ln_f_input.dtype}")
-        #print("L2 Norm of ln_f input difference:", torch.norm(model_ln_f_input - reference_model_ln_f_input).item())
-
-        manual_model_out = debug_layernorm(model.transformer.ln_f, model_ln_f_input)
-        manual_ref_out = debug_layernorm(reference_model.transformer.ln_f, reference_model_ln_f_input)
-        print(f"Manual computation difference: {torch.norm(manual_model_out - manual_ref_out).item()}")
-        # compare manual with actual output
-        print(f"Manual vs actual model output difference: {torch.norm(manual_model_out - model_ln_f_output).item()}")
-        print(f"Manual vs actual reference output difference: {torch.norm(manual_ref_out - reference_model_ln_f_output).item()}")
-
-    def reference_model_any_module_forward_hook(module, input, output):
-        global reference_model_any_module_output
-        reference_model_any_module_output = output.detach().clone()
-
-    def model_any_module_forward_hook(module, input, output):
-        global model_any_module_output
-        model.any_module_output = output.detach().clone()
-        print("L2 Norm of any module output difference:", torch.norm(model.any_module_output - reference_model_any_module_output).item())
-
-    model.transformer.ln_f.register_forward_hook(model_ln_f_forwad_hook)
-    reference_model.transformer.ln_f.register_forward_hook(reference_model_ln_f_forward_hook)
-
-    # register at some random module
-    model.transformer.h[3].mlp.register_forward_hook(model_any_module_forward_hook)
-    reference_model.transformer.h[3].mlp.register_forward_hook(reference_model_any_module_forward_hook)
-
-    print(f"Model has muP: {has_mup_enabled(model.config)}")
-    print(f"Reference has muP: {has_mup_enabled(reference_model.config)}")
-
-    # DEBUGGING: manual computation of the ln_f output
-    def debug_layernorm(ln_module, input_tensor):
-        """Manually compute layernorm to debug"""
-        weight = ln_module.weight
-        bias = ln_module.bias
-        eps = ln_module.eps
-        normalized_shape = ln_module.normalized_shape
-        
-        mean = input_tensor.mean(dim=-1, keepdim=True)
-        var = input_tensor.var(dim=-1, keepdim=True, unbiased=False)
-        output = (input_tensor - mean) / torch.sqrt(var + eps)
-        if weight is not None:
-            output = output * weight
-        if bias is not None:
-            output = output + bias
-        return output
-
-    # DEBUGGING: now also register hooks for the ln_f input difference
-    def reference_model_ln_f_forward_pre_hook(module, input):
-        global reference_model_ln_f_input
-        reference_model_ln_f_input = input[0].detach().clone()
-
-    def model_ln_f_forward_pre_hook(module, input):
-        global model_ln_f_input
-        model_ln_f_input = input[0].detach().clone()
-        print("L2 Norm of ln_f input difference:", torch.norm(model_ln_f_input - reference_model_ln_f_input).item())
-
-    model.transformer.ln_f.register_forward_pre_hook(model_ln_f_forward_pre_hook)
-    reference_model.transformer.ln_f.register_forward_pre_hook(reference_model_ln_f_forward_pre_hook)
-
     # profile the training with the pytorch profiler (optional)
     if use_pytorch_profiler:
         profiler = profile(
@@ -790,26 +538,22 @@ def fit(
             
             loss_sum = None
             for local_input_ids, local_targets in [(input_ids_first_one, targets_first_one), (input_ids_second_one, targets_second_one)]:
-                #with fabric.no_backward_sync(model, enabled=is_accumulating):
-                with nullcontext():
+                with fabric.no_backward_sync(model, enabled=is_accumulating):
                     if with_activation_differences:                                      
                         with torch.no_grad():   
                             _ = reference_model(local_input_ids)     
 
                     logits = model(local_input_ids)
                     loss = loss_fn(logits, local_targets)
-                    # fabric.backward(loss / train.gradient_accumulation_iters(devices))
-                    loss = loss / train.gradient_accumulation_iters(devices)
-                    loss.backward()
-                    
+                    fabric.backward(loss / train.gradient_accumulation_iters(devices))
+
                     if loss_sum is None:
                         loss_sum = loss.detach() / 2
                     else:
                         loss_sum += loss.detach() / 2
 
                     if with_mup_coordinate_check:
-                        #with fabric.autocast():
-                        with nullcontext(): 
+                        with fabric.autocast():
                             training_monitor.mup_coordinate_check(fabric.device)
 
                 training_monitor.after_micro_batch()                                                                    
@@ -817,18 +561,14 @@ def fit(
 
         # normal forward pass
         else:                                                                            
-            #with fabric.no_backward_sync(model, enabled=is_accumulating):
-            with nullcontext():
+            with fabric.no_backward_sync(model, enabled=is_accumulating):
                 # (micro-) batch
                 logits = model(input_ids)
                 loss = loss_fn(logits, targets)
-                #fabric.backward(loss / train.gradient_accumulation_iters(devices))
-                loss = loss / train.gradient_accumulation_iters(devices)
-                loss.backward()
+                fabric.backward(loss / train.gradient_accumulation_iters(devices))
 
                 if with_mup_coordinate_check:
-                    #with fabric.autocast():
-                    with nullcontext():
+                    with fabric.autocast():
                         training_monitor.mup_coordinate_check(fabric.device)
 
             running_loss.update(loss.detach())
