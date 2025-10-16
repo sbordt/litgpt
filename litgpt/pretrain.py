@@ -599,6 +599,25 @@ def fit(
 
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
+    # After setting up both models and before the training loop
+    config = model.config
+    if reference_model is not None:
+        # Create a fresh LayerNorm with the same config
+        new_ln_f = config.norm_class(config.n_embd, eps=config.norm_eps)
+        new_ln_f = new_ln_f.to(fabric.device)
+        
+        # Copy the weights and bias from the model's ln_f
+        new_ln_f.load_state_dict(model.transformer.ln_f.state_dict())
+        
+        # Replace the reference model's ln_f
+        reference_model.transformer.ln_f = new_ln_f
+        
+        # Verify it works
+        test_input = torch.randn(2, 4, config.n_embd, device=fabric.device)
+        model_output = model.transformer.ln_f(test_input)
+        ref_output = reference_model.transformer.ln_f(test_input)
+        print(f"After replacement, ln_f difference: {torch.norm(model_output - ref_output).item()}")
+
     # put both models in training mode
     model.train()
     if reference_model is not None:
