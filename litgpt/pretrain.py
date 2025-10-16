@@ -597,6 +597,22 @@ def fit(
 
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
+    # print ln_f weights in both models
+    print("L2 Norm of ln_f weights difference:", torch.norm(model.ln_f.weight - reference_model.ln_f.weight).item())
+    print("L2 Norm of lm_head weights difference:", torch.norm(model.lm_head.weight - reference_model.lm_head.weight).item())
+    print(model.ln_f.weight)
+    print(reference_model.ln_f.weight)
+    print(model.transformer.h[0].norm_1.weight)
+    print(reference_model.transformer.h[0].norm_1.weight)
+    
+    # now the same for bias
+    print("L2 Norm of ln_f bias difference:", torch.norm(model.ln_f.bias - reference_model.ln_f.bias).item())
+    print("L2 Norm of lm_head bias difference:", torch.norm(model.lm_head.bias - reference_model.lm_head.bias).item())
+    print(model.ln_f.bias)
+    print(reference_model.ln_f.bias)
+    print(model.transformer.h[0].norm_1.bias)
+    print(reference_model.transformer.h[0].norm_1.bias)
+
     # DEBUGGING: ln_f bug
     def reference_model_ln_f_forward_hook(module, input, output):
         global reference_model_ln_f_output
