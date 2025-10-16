@@ -605,6 +605,12 @@ def fit(
     print(f"Model ln_f eps: {model.transformer.ln_f.eps}")
     print(f"Reference ln_f eps: {reference_model.transformer.ln_f.eps}")
 
+    print(f"Model ln_f normalized_shape: {model.transformer.ln_f.normalized_shape}")
+    print(f"Reference ln_f normalized_shape: {reference_model.transformer.ln_f.normalized_shape}")
+
+    print(f"Model ln_f elementwise_affine: {model.transformer.ln_f.elementwise_affine}")
+    print(f"Reference ln_f elementwise_affine: {reference_model.transformer.ln_f.elementwise_affine}")
+
     # print ln_f weights in both models
     print("L2 Norm of ln_f weights difference:", torch.norm(model.transformer.ln_f.weight - reference_model.transformer.ln_f.weight).item())
     print(model.transformer.ln_f.weight)
@@ -628,6 +634,11 @@ def fit(
         global model_ln_f_output
         model.ln_f_output = output.detach()
         print("L2 Norm of ln_f output difference:", torch.norm(model.ln_f_output - reference_model_ln_f_output).item())
+        print(f"Model ln_f input shape: {model_ln_f_input.shape}")
+        print(f"Reference ln_f input shape: {reference_model_ln_f_input.shape}")
+        print(f"Model ln_f input dtype: {model_ln_f_input.dtype}")
+        print(f"Reference ln_f input dtype: {reference_model_ln_f_input.dtype}")
+        print("L2 Norm of ln_f input difference:", torch.norm(model_ln_f_input - reference_model_ln_f_input).item())
 
     def reference_model_any_module_forward_hook(module, input, output):
         global reference_model_any_module_output
@@ -657,6 +668,32 @@ def fit(
 
     model.transformer.ln_f.register_forward_pre_hook(model_ln_f_forward_pre_hook)
     reference_model.transformer.ln_f.register_forward_pre_hook(reference_model_ln_f_forward_pre_hook)
+
+    # DEBUGGING: manual computation of the ln_f output
+    def debug_layernorm(ln_module, input_tensor):
+        """Manually compute layernorm to debug"""
+        weight = ln_module.weight
+        bias = ln_module.bias
+        eps = ln_module.eps
+        normalized_shape = ln_module.normalized_shape
+        
+        mean = input_tensor.mean(dim=-1, keepdim=True)
+        var = input_tensor.var(dim=-1, keepdim=True, unbiased=False)
+        output = (input_tensor - mean) / torch.sqrt(var + eps)
+        if weight is not None:
+            output = output * weight
+        if bias is not None:
+            output = output + bias
+        return output
+
+    # In your hooks:
+    manual_model_out = debug_layernorm(model.transformer.ln_f, model_ln_f_input)
+    manual_ref_out = debug_layernorm(reference_model.transformer.ln_f, reference_model_ln_f_input)
+    print(f"Manual computation difference: {torch.norm(manual_model_out - manual_ref_out).item()}")
+
+    # compare manual with actual output
+    print(f"Manual vs actual model output difference: {torch.norm(manual_model_out - model.ln_f_output).item()}")
+    print(f"Manual vs actual reference output difference: {torch.norm(manual_ref_out - reference_model_ln_f_output).item()}")
 
     # profile the training with the pytorch profiler (optional)
     if use_pytorch_profiler:
