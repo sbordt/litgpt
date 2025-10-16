@@ -189,6 +189,9 @@ def initialize_mup_weights_with_last_layer_sp(fabric: L.Fabric, model, n_layer: 
         if isinstance(mod, (LLaMAMLP, CausalSelfAttention)):
             mod.proj.reset_parameters = partial(init_weights, mod.proj, std=(1 / math.sqrt(n_embd) / n_layer))
 
+    # special init for the output layer that accounts for the width-dependent scaling of the input
+    model.lm_head.reset_parameters = partial(init_weights, model.lm_head, std=math.sqrt(2.0 / 5 * n_embd))
+
     if not isinstance(fabric.strategy, FSDPStrategy):
         reset_parameters(model)
 
