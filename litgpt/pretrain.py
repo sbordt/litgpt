@@ -762,22 +762,26 @@ def fit(
             
             loss_sum = None
             for local_input_ids, local_targets in [(input_ids_first_one, targets_first_one), (input_ids_second_one, targets_second_one)]:
-                with fabric.no_backward_sync(model, enabled=is_accumulating):
+                #with fabric.no_backward_sync(model, enabled=is_accumulating):
+                with nullcontext():
                     if with_activation_differences:                                      
                         with torch.no_grad():   
                             _ = reference_model(local_input_ids)     
 
                     logits = model(local_input_ids)
                     loss = loss_fn(logits, local_targets)
-                    fabric.backward(loss / train.gradient_accumulation_iters(devices))
-
+                    # fabric.backward(loss / train.gradient_accumulation_iters(devices))
+                    loss = loss / train.gradient_accumulation_iters(devices)
+                    loss.backward()
+                    
                     if loss_sum is None:
                         loss_sum = loss.detach() / 2
                     else:
                         loss_sum += loss.detach() / 2
 
                     if with_mup_coordinate_check:
-                        with fabric.autocast():
+                        #with fabric.autocast():
+                        with nullcontext(): 
                             training_monitor.mup_coordinate_check(fabric.device)
 
                 training_monitor.after_micro_batch()                                                                    
@@ -785,14 +789,18 @@ def fit(
 
         # normal forward pass
         else:                                                                            
-            with fabric.no_backward_sync(model, enabled=is_accumulating):
+            #with fabric.no_backward_sync(model, enabled=is_accumulating):
+            with nullcontext():
                 # (micro-) batch
                 logits = model(input_ids)
                 loss = loss_fn(logits, targets)
-                fabric.backward(loss / train.gradient_accumulation_iters(devices))
+                #fabric.backward(loss / train.gradient_accumulation_iters(devices))
+                loss = loss / train.gradient_accumulation_iters(devices)
+                loss.backward()
 
                 if with_mup_coordinate_check:
-                    with fabric.autocast():
+                    #with fabric.autocast():
+                    with nullcontext():
                         training_monitor.mup_coordinate_check(fabric.device)
 
             running_loss.update(loss.detach())
