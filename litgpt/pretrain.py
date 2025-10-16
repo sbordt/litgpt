@@ -597,6 +597,19 @@ def fit(
 
     warmup_iters = train.warmup_iters(devices, max_iters, train_dataloader)
 
+    # DEBUGGING: ln_f bug
+    def reference_model_ln_f_forward_hook(module, input, output):
+        global reference_model_ln_f_output
+        reference_model_ln_f_output = output.detach()
+
+    def model_ln_f_forwad_hook(module, input, output):
+        global model_ln_f_output
+        model.ln_f_output = output.detach()
+        print("L2 Norm of ln_f output difference:", torch.norm(model.ln_f_output - reference_model_ln_f_output).item())
+
+    model.transformer.ln_f.register_forward_hook(model_ln_f_forwad_hook)
+    reference_model.transformer.ln_f.register_forward_hook(reference_model_ln_f_forward_hook)
+
     # profile the training with the pytorch profiler (optional)
     if use_pytorch_profiler:
         profiler = profile(

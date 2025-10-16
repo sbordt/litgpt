@@ -225,7 +225,7 @@ if __name__ == "__main__":
 
     # create the training monitor
     # debug logging level
-    logging.getLogger("ModuleMonitor").setLevel(logging.DEBUG)
+    # logging.getLogger("ModuleMonitor").setLevel(logging.INFO)
 
     training_monitor = ModuleMonitor(monitor_interval=args.monitor_interval, 
                                        monitor=args.monitor,
