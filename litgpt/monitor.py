@@ -528,7 +528,7 @@ class ModuleMonitor:
             with torch.no_grad():
                 # perform a forward pass in the comparison module, using the intermediate input from the monitored module (W_0 x_t)
                 self.ignore_reference_module_activations = True      # temporarily ignore reference module activation hooks (relevant if the comparison module is the reference module)
-                W0_xt = W0_module(*Wt_input).detach()
+                W0_xt = W0_module(*Wt_input).detach().clone()
                 self.ignore_reference_module_activations = False
 
                 # for modules that have a .bias attribute, additionally compute the metrics without the bias
