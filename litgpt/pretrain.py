@@ -637,6 +637,19 @@ def fit(
     model.transformer.h[3].mlp.register_forward_hook(model_any_module_forward_hook)
     reference_model.transformer.h[3].mlp.register_forward_hook(reference_model_any_module_forward_hook)
 
+    # DEBUGGING: now also register hooks for the ln_f input difference
+    def reference_model_ln_f_forward_pre_hook(module, input):
+        global reference_model_ln_f_input
+        reference_model_ln_f_input = input[0].detach()
+
+    def model_ln_f_forward_pre_hook(module, input):
+        global model_ln_f_input
+        model_ln_f_input = input[0].detach()
+        print("L2 Norm of ln_f input difference:", torch.norm(model_ln_f_input - reference_model_ln_f_input).item())
+
+    model.transformer.ln_f.register_forward_pre_hook(model_ln_f_forward_pre_hook)
+    reference_model.transformer.ln_f.register_forward_pre_hook(reference_model_ln_f_forward_pre_hook)
+
     # profile the training with the pytorch profiler (optional)
     if use_pytorch_profiler:
         profiler = profile(
