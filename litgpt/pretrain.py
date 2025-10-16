@@ -599,7 +599,6 @@ def fit(
 
     # print ln_f weights in both models
     print("L2 Norm of ln_f weights difference:", torch.norm(model.transformer.ln_f.weight - reference_model.transformer.ln_f.weight).item())
-    print("L2 Norm of lm_head weights difference:", torch.norm(model.transformer.lm_head.weight - reference_model.transformer.lm_head.weight).item())
     print(model.transformer.ln_f.weight)
     print(reference_model.transformer.ln_f.weight)
     print(model.transformer.h[0].norm_1.weight)
@@ -607,7 +606,6 @@ def fit(
     
     # now the same for bias
     print("L2 Norm of ln_f bias difference:", torch.norm(model.transformer.ln_f.bias - reference_model.transformer.ln_f.bias).item())
-    print("L2 Norm of lm_head bias difference:", torch.norm(model.transformer.lm_head.bias - reference_model.transformer.lm_head.bias).item())
     print(model.transformer.ln_f.bias)
     print(reference_model.transformer.ln_f.bias)
     print(model.transformer.h[0].norm_1.bias)
