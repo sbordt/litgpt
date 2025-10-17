@@ -162,7 +162,7 @@ if __name__ == "__main__":
         print("Number of model parameters: ", count_model_parameters(GPT(model_config))) 
 
     # parametrization check: we can only specify one of mup, sgd full align, adamw full align
-    num_specified_conditions = sum(int(args.mup) + int(args.sgd_full_align) + int(args.adamw_full_align))
+    num_specified_conditions = int(args.mup) + int(args.sgd_full_align) + int(args.adamw_full_align)
     if num_specified_conditions > 1:
         raise ValueError("Can only specify one of mup, sgd_full_align, adamw_full_align")
 
