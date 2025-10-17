@@ -229,7 +229,7 @@ def initialize_spfullalign_weights(fabric: L.Fabric, model, n_layer: int, n_embd
         reset_parameters(model)
 
 
-def instantiate_adam_spfullalign_optimizer(optimizer: dict, width_multiplier: float, model, **kwargs):
+def instantiate_adam_spfullalign_optimizer(optimizer: dict, model, width_multiplier: float, **kwargs):
     """this only supports adam
     """
     optimizer = dict(optimizer)
