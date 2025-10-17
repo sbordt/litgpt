@@ -1,15 +1,14 @@
-"""Litgpt training with Maximal Update Parametrization (μP).
+"""Litgpt training with Maximal Update Parametrization (μP) and other parametrizations.
 
-   muP means that:
-    - the initial weights of the output layer (lm_head) are set to zero
-    - the input embedding forward pass output is multiplied by a tunable parameter (input_alpha)
-    - the output unembedding forward pass output is multiplied by a tunable parameter (output_alpha)
-    - 
+   The mup implementation is inspired by https://github.com/EleutherAI/nanoGPT-mup/
 
+   A parametrization consists of:
+   - a function that inits the model weights
+   - a function that instantiates the optimizer with appropriate parameter groups and learning rate scaling
 
-   Inspired by https://github.com/EleutherAI/nanoGPT-mup/
+   For mup, we additionally set an element in the model config to indicate that mup is enabled, for the purpose of scaling the forward pass inputs/outputs appropriately.
 
-   Note that this module does not (yet) support all classes of models. 
+   IMPORTANT: This is research code that was only tested with Pythia models.
 """
 
 from lightning.fabric.strategies import FSDPStrategy
@@ -104,6 +103,8 @@ def initialize_standard_weights(fabric: L.Fabric, model, n_layer: int, n_embd: i
     """
     from litgpt.model import LLaMAMLP, CausalSelfAttention
 
+    print("Performing standard weight initialization...")
+
     def init_weights(module, std):
         nn.init.normal_(module.weight, mean=0.0, std=std)
         if getattr(module, "bias", None) is not None:
@@ -160,6 +161,8 @@ def initialize_mup_weights(fabric: L.Fabric, model, n_layer: int, n_embd: int) -
 
 def instantiate_adam_mup_optimizer(optimizer: dict, model, **kwargs):
     """ this only supports adam """
+    print("Instantiating Adam optimizer with muP parameter groups...")
+
     optimizer = dict(optimizer)
     class_module, class_name = optimizer["class_path"].rsplit(".", 1)
     module = __import__(class_module, fromlist=[class_name])
@@ -201,7 +204,7 @@ def initialize_spfullalign_weights(fabric: L.Fabric, model, n_layer: int, n_embd
     """
     from litgpt.model import LLaMAMLP, CausalSelfAttention
 
-    print("Performing muP weight initialization, except for the last layer...")
+    print("Performing sp-fullalign weights initialization...")
     print(f"Model type: {type(model)}")
     print(f"Model has config attribute: {hasattr(model, 'config')}")
     print(f"Model has mup_args attribute: {hasattr(model.config, 'mup_args')}")
@@ -232,6 +235,8 @@ def initialize_spfullalign_weights(fabric: L.Fabric, model, n_layer: int, n_embd
 def instantiate_adam_spfullalign_optimizer(optimizer: dict, model, width_multiplier: float, **kwargs):
     """this only supports adam
     """
+    print("Instantiating AdamW optimizer with sp-fullalign parameter groups...")
+
     optimizer = dict(optimizer)
     class_module, class_name = optimizer["class_path"].rsplit(".", 1)
     module = __import__(class_module, fromlist=[class_name])
@@ -265,6 +270,8 @@ def instantiate_adam_spfullalign_optimizer(optimizer: dict, model, width_multipl
 def instantiate_sgd_fullalign_optimizer(optimizer: dict, model, width_multiplier: float, **kwargs):
     """ Train with SGD full align, see Table 1 in https://arxiv.org/pdf/2407.05872
     """
+    print("Instantiating SGD optimizer with full align parameter groups...")
+
     optimizer = dict(optimizer)
     class_module, class_name = optimizer["class_path"].rsplit(".", 1)
     module = __import__(class_module, fromlist=[class_name])
