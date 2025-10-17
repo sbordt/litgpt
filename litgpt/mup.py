@@ -158,10 +158,46 @@ def initialize_mup_weights(fabric: L.Fabric, model, n_layer: int, n_embd: int) -
         reset_parameters(model)
 
 
-def initialize_mup_weights_with_last_layer_sp(fabric: L.Fabric, model, n_layer: int, n_embd: int) -> None:
-    r"""muP weight initialization, except for the last layer.
-    
-    Otherwise this is equal to the standard weight initialization.
+def instantiate_adam_mup_optimizer(optimizer: dict, model, **kwargs):
+    """ this only supports adam """
+    optimizer = dict(optimizer)
+    class_module, class_name = optimizer["class_path"].rsplit(".", 1)
+    module = __import__(class_module, fromlist=[class_name])
+    optimizer_cls = getattr(module, class_name)
+
+    valid_params = set(inspect.signature(optimizer_cls).parameters)
+    kwargs = {key: value for key, value in dict(kwargs).items() if key in valid_params}
+    optimizer["init_args"].update(kwargs)
+
+    if not has_mup_enabled(model.config):
+        raise ValueError("To instantiate mup optimizer, config must have mup enabled.")
+
+    # define parameter groups for mup
+    weight_decay = optimizer["init_args"].get("weight_decay", 0.0)
+
+    param_dict = {pn: p for pn, p in model.named_parameters()}
+    param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+    mup_params = []
+    other_params = []
+    for n, p in param_dict.items():
+        if n.endswith('attn.weight') or n.endswith('fc.weight') or n.endswith('proj.weight'):   # note that we do not scale the learning rate of the output layer (lm_head). we scale the input to the output layer (lm_head) in the forward pass instead.
+            mup_params.append(p)
+        else:
+            other_params.append(p)
+    optim_groups = [
+        # we set a custom parameter lr_scale for each group
+        # the training code is responsible for using this scale factor after
+        # scheduling the overall leraning rate for the current step
+        {"params": mup_params, "lr_scale": 1/model.config.mup_args.width_multiplier, "weight_decay": weight_decay * model.config.mup_args.width_multiplier},        # adujust weight decay for mup params: we want to keep the same effective weight decay for all parameters.
+        {"params": other_params, "lr_scale": 1, "weight_decay": weight_decay},
+    ]
+    print(f"Number of parameters with muP learning rate scaling: {sum(p.numel() for p in mup_params if p.requires_grad)}")
+
+    return instantiate_class(optim_groups, optimizer)
+
+
+def initialize_spfullalign_weights(fabric: L.Fabric, model, n_layer: int, n_embd: int) -> None:
+    r"""This is for sp-fullalign
     """
     from litgpt.model import LLaMAMLP, CausalSelfAttention
 
@@ -189,19 +225,13 @@ def initialize_mup_weights_with_last_layer_sp(fabric: L.Fabric, model, n_layer: 
         if isinstance(mod, (LLaMAMLP, CausalSelfAttention)):
             mod.proj.reset_parameters = partial(init_weights, mod.proj, std=(1 / math.sqrt(n_embd) / n_layer))
 
-    # special init for the output layer that accounts for the width-dependent scaling of the input
-    model.lm_head.reset_parameters = partial(init_weights, model.lm_head, std=math.sqrt(2.0 / 5 * n_embd))
-
     if not isinstance(fabric.strategy, FSDPStrategy):
         reset_parameters(model)
 
 
-def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
-    # Special care taken where some optimizers do not have some parameters referenced in some of the code, for example "fused" in the pretrain.py script:
-    #   bnb.optim.AdamW8bit
-    #   grokadamw.GrokAdamW
-    #   torch.optim.RMSprop
-    # TODO this currently only supports adam! add support for sgd and others later
+def instantiate_adam_spfullalign_optimizer(optimizer: dict, width_multiplier: float, model, **kwargs):
+    """this only supports adam
+    """
     optimizer = dict(optimizer)
     class_module, class_name = optimizer["class_path"].rsplit(".", 1)
     module = __import__(class_module, fromlist=[class_name])
@@ -211,35 +241,28 @@ def instantiate_torch_mup_optimizer(optimizer: dict, model, **kwargs):
     kwargs = {key: value for key, value in dict(kwargs).items() if key in valid_params}
     optimizer["init_args"].update(kwargs)
 
-    if not has_mup_enabled(model.config):
-        print("WARNING: MuP is not enabled. Ignoring MuP optimizer instantiation.")
-        return instantiate_class(model.parameters(), optimizer)
-
-    # define parameter groups for mup
+    # define parameter groups for spfullalign
     weight_decay = optimizer["init_args"].get("weight_decay", 0.0)
 
     param_dict = {pn: p for pn, p in model.named_parameters()}
     param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-    mup_params = []
+    params_with_scaled_lr = []
     other_params = []
     for n, p in param_dict.items():
-        if n.endswith('attn.weight') or n.endswith('fc.weight') or n.endswith('proj.weight'):   # note that we do not scale the learning rate of the output layer (lm_head). we scale the input to the output layer (lm_head) in the forward pass instead.
-            mup_params.append(p)
+        if n.endswith('attn.weight') or n.endswith('fc.weight') or n.endswith('proj.weight') or n.endswith('lm_head.weight'):
+            params_with_scaled_lr.append(p)
         else:
             other_params.append(p)
     optim_groups = [
-        # we set a custom parameter lr_scale for each group
-        # the training code is responsible for using this scale factor after
-        # scheduling the overall leraning rate for the current step
-        {"params": mup_params, "lr_scale": 1/model.config.mup_args.width_multiplier, "weight_decay": weight_decay * model.config.mup_args.width_multiplier},        # adujust weight decay for mup params: we want to keep the same effective weight decay for all parameters.
+        {"params": params_with_scaled_lr, "lr_scale": 1/width_multiplier, "weight_decay": weight_decay * width_multiplier},        # keep the same effective weight decay for all parameters.
         {"params": other_params, "lr_scale": 1, "weight_decay": weight_decay},
     ]
-    print(f"Number of parameters with muP learning rate scaling: {sum(p.numel() for p in mup_params if p.requires_grad)}")
+    print(f"Number of parameters with muP learning rate scaling: {sum(p.numel() for p in params_with_scaled_lr if p.requires_grad)}")
 
     return instantiate_class(optim_groups, optimizer)
 
 
-def instantiate_torch_sgd_full_align_optimizer(optimizer: dict, model, width_multiplier: float, **kwargs):
+def instantiate_sgd_fullalign_optimizer(optimizer: dict, model, width_multiplier: float, **kwargs):
     """ Train with SGD full align, see Table 1 in https://arxiv.org/pdf/2407.05872
     """
     optimizer = dict(optimizer)

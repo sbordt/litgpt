@@ -8,7 +8,8 @@ from litgpt.monitor import ModuleMonitor
 from litgpt.pretrain import setup
 from litgpt.args import TrainArgs, EvalArgs
 
-from litgpt.mup import scale_width, apply_mup, initialize_mup_weights, initialize_standard_weights, initialize_mup_weights_with_last_layer_sp, instantiate_torch_sgd_full_align_optimizer
+from litgpt.mup import scale_width, apply_mup, initialize_mup_weights, initialize_standard_weights, \
+                       initialize_spfullalign_weights, instantiate_sgd_fullalign_optimizer, instantiate_adam_spfullalign_optimizer
 
 from pathlib import Path
 import argparse
@@ -89,7 +90,7 @@ if __name__ == "__main__":
     parser.add_argument('--mup', action='store_true', help='Enable MUP (Maximal Update Parameterization)')
     parser.add_argument("--mup_input_alpha", type=float, default=1.0)
     parser.add_argument("--mup_output_alpha", type=float, default=1.0)
-    parser.add_argument("--force-last-layer-sp-init", action="store_true", default=False, help="force the last layer initialization to be the same as the standard initialization, even when using muP")
+    parser.add_argument("--adamw-full-align", action="store_true", default=False, help="sp-fullalign with adamw")
     parser.add_argument("--sgd-full-align", action="store_true", default=False, help="use the SGD full align optimizer")
     parser.add_argument("--precision", type=str, default="32-true")
     parser.add_argument("--tie_embeddings", action="store_true", default=False)
@@ -160,10 +161,21 @@ if __name__ == "__main__":
         print_config_wrt_scaling(model_config)
         print("Number of model parameters: ", count_model_parameters(GPT(model_config))) 
 
+    # parametrization check: we can only specify one of mup, sgd full align, adamw full align
+    num_specified_conditions = sum(int(args.mup) + int(args.sgd_full_align) + int(args.adamw_full_align))
+    if num_specified_conditions > 1:
+        raise ValueError("Can only specify one of mup, sgd_full_align, adamw_full_align")
+
     # weight initialization
-    initialize_weights_fn = initialize_mup_weights if args.mup else initialize_standard_weights
-    if args.mup and args.force_last_layer_sp_init:
-        initialize_weights_fn = initialize_mup_weights_with_last_layer_sp
+    initialize_weights_fn = initialize_standard_weights
+    if args.mup:
+        initialize_weights_fn = initialize_mup_weights
+    if args.adamw_full_align:
+        initialize_weights_fn = initialize_spfullalign_weights
+
+    # parametrization check: SGD is not supported with mup and adamw_full_align
+    if args.optimizer == "SGD" and (args.mup or args.adamw_full_align):
+        raise ValueError("SGD is not supported with mup and adamw_full_align")
 
     # optimizer configuration
     optimizer_args = {
@@ -187,7 +199,9 @@ if __name__ == "__main__":
     # optimizer initialization function
     initialize_optimizer_fn = None
     if args.sgd_full_align:
-        initialize_optimizer_fn = partial(instantiate_torch_sgd_full_align_optimizer, width_multiplier=args.width/256) # hard-coded for our experiments with base width 256!
+        initialize_optimizer_fn = partial(instantiate_sgd_fullalign_optimizer, width_multiplier=args.width/256) # hard-coded for our experiments with base width 256!
+    if args.adamw_full_align:
+        initialize_optimizer_fn = partial(instantiate_adam_spfullalign_optimizer, width_multiplier=args.width/256)
 
     # dataset
     data = DclmData(data_path=Path(args.data_dir), seed=args.data_seed)

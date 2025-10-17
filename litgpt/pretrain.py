@@ -55,7 +55,7 @@ from litgpt.utils import (
 )
 
 from litgpt.monitor import ModuleMonitor
-from litgpt.mup import has_mup_enabled, instantiate_torch_mup_optimizer
+from litgpt.mup import has_mup_enabled, instantiate_adam_mup_optimizer
 
 import pickle
 
@@ -311,7 +311,7 @@ def main(
         optimizer = initialize_optimizer_fn(optimizer, model, **extra_kwargs)
     else:
         if has_mup_enabled(config):
-            optimizer = instantiate_torch_mup_optimizer(optimizer, model, **extra_kwargs)
+            optimizer = instantiate_adam_mup_optimizer(optimizer, model, **extra_kwargs)
         else:
             optimizer = instantiate_torch_optimizer(optimizer, model.parameters(), **extra_kwargs)
     optimizer = fabric.setup_optimizers(optimizer)
